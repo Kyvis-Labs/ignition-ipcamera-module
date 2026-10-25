@@ -50,7 +50,7 @@ export async function whepConnect(url: string, video: HTMLVideoElement, signal: 
             signal,
         });
         if (res.status !== 201) {
-            throw new Error(res.status === 401 ? "not authorised" : res.status === 404 ? "stream not available" : `WHEP ${res.status}`);
+            throw new Error(res.status === 401 ? "not authorised" : res.status === 404 ? "camera offline" : await whepError(res));
         }
         const location = res.headers.get("Location");
         if (location) {
@@ -67,6 +67,19 @@ export async function whepConnect(url: string, video: HTMLVideoElement, signal: 
         session.close();
         throw e;
     }
+}
+
+/** MediaMTX explains refusals in a JSON body, e.g. a codec WebRTC cannot carry (H.265 on most browsers). */
+async function whepError(res: Response): Promise<string> {
+    try {
+        const j = await res.json();
+        if (j && j.error) {
+            return /codec/i.test(j.error) ? `${j.error} (set the camera to H.264)` : j.error;
+        }
+    } catch {
+        // not JSON
+    }
+    return `WHEP ${res.status}`;
 }
 
 function iceGatheringComplete(pc: RTCPeerConnection, timeoutMs: number): Promise<void> {

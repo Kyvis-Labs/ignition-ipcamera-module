@@ -54,7 +54,23 @@ export async function liveUrl(delegate: CameraDelegate, camera: string, quality:
     if (!s || s.error) {
         throw new Error(s?.error ?? "no stream");
     }
+    lastCodecs.set(camera, s.codecs ?? "");
     return s.whep;
+}
+
+/** Codecs the gateway last reported per camera, for explaining playback failures. */
+export const lastCodecs = new Map<string, string>();
+
+/**
+ * Why a stream may not play here: H.265 needs a browser with HEVC decode (Safari, Chrome/Edge
+ * with hardware support); Firefox and many Windows setups cannot.
+ */
+export function codecProblem(codecs: string | undefined): string | null {
+    if (!codecs || !/H265|HEVC/i.test(codecs)) {
+        return null;
+    }
+    const probe = typeof document !== "undefined" ? document.createElement("video").canPlayType('video/mp4; codecs="hvc1.1.6.L93.B0"') : "";
+    return probe ? null : "this browser cannot decode H.265; set the camera to H.264 or use a browser with HEVC support";
 }
 
 export interface MarkerData {
@@ -90,6 +106,7 @@ export async function playbackWindow(delegate: CameraDelegate, camera: string, s
     if (!s || s.error) {
         throw new Error(s?.error ?? "no recording");
     }
+    lastCodecs.set(camera, s.codecs ?? "");
     return { url: s.url, startMs: s.start ?? start, durationSec: s.duration ?? durationSec };
 }
 

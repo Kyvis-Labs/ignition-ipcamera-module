@@ -7,7 +7,7 @@ import {
     PComponent,
     PropertyTree,
 } from "@inductiveautomation/perspective-client";
-import { addBookmark, CameraDelegate, liveUrl, playbackWindow, toMs } from "../delegate";
+import { addBookmark, CameraDelegate, codecProblem, lastCodecs, liveUrl, playbackWindow, toMs } from "../delegate";
 import { LivePlayer, LiveState } from "../player/LivePlayer";
 import { PlaybackPlayer } from "../player/PlaybackPlayer";
 import { Marker, TimelineBar } from "../player/TimelineBar";
@@ -142,7 +142,8 @@ export function CameraView(props: ComponentProps<CameraViewProps>) {
     const live = p.mode !== "playback";
     const badgeState: LiveState = !camera ? "error" : live ? liveState.s
         : pbState.s === "playing" ? "live" : pbState.s === "error" ? "error" : "connecting";
-    const badgeDetail = !camera ? "no camera set" : live ? liveState.detail
+    const codecIssue = (live ? liveState.s === "retrying" : pbState.s === "error") ? codecProblem(lastCodecs.get(camera)) : null;
+    const badgeDetail = !camera ? "no camera set" : codecIssue ? codecIssue : live ? liveState.detail
         : pbState.s === "gap" ? "skipped a gap in the recording" : pbState.s === "end" ? "end of recording" : pbState.detail;
 
     return (

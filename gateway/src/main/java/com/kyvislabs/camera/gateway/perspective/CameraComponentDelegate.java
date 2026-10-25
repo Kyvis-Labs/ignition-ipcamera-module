@@ -18,6 +18,7 @@ import com.inductiveautomation.perspective.gateway.api.Component;
 import com.inductiveautomation.perspective.gateway.api.ComponentModelDelegate;
 import com.inductiveautomation.perspective.gateway.messages.EventFiredMsg;
 import com.kyvislabs.camera.gateway.CameraAccess;
+import com.kyvislabs.camera.gateway.CameraManager;
 import com.kyvislabs.camera.gateway.CameraServices;
 import com.kyvislabs.camera.gateway.auth.TokenService;
 import com.kyvislabs.camera.gateway.config.CameraConfig;
@@ -107,6 +108,7 @@ public class CameraComponentDelegate extends ComponentModelDelegate {
                 String token = services.tokens().mint(Set.of(path), Set.of(TokenService.Action.READ), LIVE_TTL, user);
                 out.addProperty("whep", services.manager().server().publicUrl() + "/" + path + "/whep?token=" + token);
                 out.addProperty("quality", sub ? "sub" : "main");
+                out.addProperty("codecs", CameraManager.codecs(services.manager().runtime(path)));
             }
             streams.add(camera, out);
         }
@@ -181,6 +183,7 @@ public class CameraComponentDelegate extends ComponentModelDelegate {
                 String path = PathConfigs.mainPath(camera);
                 String token = services.tokens().mint(Set.of(path), Set.of(TokenService.Action.PLAYBACK),
                     PLAYBACK_TTL, user);
+                s.addProperty("codecs", CameraManager.codecs(services.manager().runtime(path)));
                 CameraEvent clip = clipCovering(camera, startMs);
                 if (clip != null) {
                     // MediaMTX no longer has this (buffer expired); serve the exported clip, which
