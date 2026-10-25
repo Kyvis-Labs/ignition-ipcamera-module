@@ -6,13 +6,18 @@ import com.inductiveautomation.ignition.common.licensing.LicenseState;
 import com.inductiveautomation.ignition.common.util.LoggerEx;
 import com.inductiveautomation.ignition.gateway.config.NamedResourceHandler;
 import com.inductiveautomation.ignition.gateway.config.SingletonResourceHandler;
+import com.inductiveautomation.ignition.gateway.dataroutes.RouteGroup;
 import com.inductiveautomation.ignition.gateway.model.AbstractGatewayModuleHook;
 import com.inductiveautomation.ignition.gateway.model.GatewayContext;
 import com.inductiveautomation.perspective.common.api.ComponentRegistry;
+import com.inductiveautomation.perspective.gateway.api.ComponentModelDelegateRegistry;
 import com.inductiveautomation.perspective.gateway.api.PerspectiveContext;
 import com.kyvislabs.camera.common.CameraModule;
 import com.kyvislabs.camera.common.CameraViewComponent;
+import com.kyvislabs.camera.gateway.auth.AuthRoute;
+import com.kyvislabs.camera.gateway.auth.TokenService;
 import com.kyvislabs.camera.gateway.config.CameraConfig;
+import com.kyvislabs.camera.gateway.perspective.CameraComponentDelegate;
 import com.kyvislabs.camera.gateway.config.MediaServerConfig;
 
 public class CameraGatewayHook extends AbstractGatewayModuleHook {
@@ -23,6 +28,8 @@ public class CameraGatewayHook extends AbstractGatewayModuleHook {
 
     private StatusTags statusTags;
     private CameraManager manager;
+    private TokenService tokens;
+    private ComponentModelDelegateRegistry delegateRegistry;
     private SingletonResourceHandler<MediaServerConfig> serverHandler;
     private NamedResourceHandler<CameraConfig> cameraHandler;
 
@@ -36,7 +43,8 @@ public class CameraGatewayHook extends AbstractGatewayModuleHook {
             .register(MediaServerConfig.META)
             .register(CameraConfig.META);
         statusTags = new StatusTags(context);
-        manager = new CameraManager(context, statusTags);
+        tokens = new TokenService();
+        manager = new CameraManager(context, statusTags, tokens);
 
         serverHandler = SingletonResourceHandler.newBuilder(MediaServerConfig.META)
             .context(context)
@@ -55,8 +63,12 @@ public class CameraGatewayHook extends AbstractGatewayModuleHook {
         cameraHandler.startup();
         manager.startup();
 
-        componentRegistry = PerspectiveContext.get(context).getComponentRegistry();
+        PerspectiveContext perspective = PerspectiveContext.get(context);
+        componentRegistry = perspective.getComponentRegistry();
         componentRegistry.registerComponent(CameraViewComponent.DESCRIPTOR);
+        CameraServices services = new CameraServices(manager, tokens);
+        delegateRegistry = perspective.getComponentModelDelegateRegistry();
+        delegateRegistry.register(CameraViewComponent.COMPONENT_ID, c -> new CameraComponentDelegate(c, services));
         log.info("Camera module started");
     }
 
@@ -64,6 +76,9 @@ public class CameraGatewayHook extends AbstractGatewayModuleHook {
     public void shutdown() {
         if (componentRegistry != null) {
             componentRegistry.removeComponent(CameraViewComponent.COMPONENT_ID);
+        }
+        if (delegateRegistry != null) {
+            delegateRegistry.remove(CameraViewComponent.COMPONENT_ID);
         }
         if (manager != null) {
             manager.shutdown();
@@ -74,6 +89,12 @@ public class CameraGatewayHook extends AbstractGatewayModuleHook {
         if (serverHandler != null) {
             serverHandler.shutdown();
         }
+    }
+
+    @Override
+    public void mountRouteHandlers(RouteGroup routes) {
+        AuthRoute.mount(routes, tokens, manager::callbackKey);
+        AdminRoutes.mount(routes, new CameraServices(manager, tokens));
     }
 
     @Override

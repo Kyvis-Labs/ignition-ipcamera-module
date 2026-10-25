@@ -19,11 +19,16 @@ Getting Started
 # Architecture
 
 ```
+Browser (Perspective) ── websocket ──▶ Gateway (this module)
+  │  asks for a stream                   checks roles, creates a token for one camera
+  ├── WebRTC ─────────────────────────▶ MediaMTX
+
 Gateway ── control API ──▶ MediaMTX: adds a path for each camera and repairs them on a timer
+MediaMTX ── auth callback ──▶ Gateway: checks the token on each request
 MediaMTX ── RTSP/RTSPS ──▶ Cameras
 ```
 
-MediaMTX pulls the camera streams and records them. The gateway owns the configuration.
+MediaMTX pulls the camera streams and records them. The gateway owns the configuration and decides who can see what. Browsers connect to MediaMTX directly, so it needs to be reachable over HTTPS, usually through a reverse proxy.
 
 # Cameras
 
@@ -31,6 +36,8 @@ Camera names become part of the stream path and can only use letters, digits, `_
 
 - **RTSP:** Enter the stream URLs and put the credentials in their own fields.
 - **UniFi Protect:** Enable RTSP on the camera in Protect. Use the `rtsps://...:7441/...` link and the certificate's SHA-256 fingerprint.
+
+Each camera has `viewRoles` and `playbackRoles`. If empty, anyone who can open a view showing the camera can see it.
 
 # Recording
 
@@ -57,7 +64,13 @@ Run MediaMTX yourself, as a container or a service. The module was built against
 
 ```yaml
 api: yes
+webrtcLocalUDPAddress: :8189
+webrtcLocalTCPAddress: :8189
+webrtcAdditionalHosts: [<addresses browsers use>]
 playback: yes
+authMethod: http
+authHTTPAddress: http://<gateway>:8088/data/camera/auth?key=<shared key>
+authHTTPExclude: [{action: api}, {action: metrics}, {action: pprof}]
 pathDefaults:
   recordPath: /recordings/%path/%Y-%m-%d_%H-%M-%S-%f
   recordFormat: fmp4
@@ -65,7 +78,7 @@ pathDefaults:
 paths: {}
 ```
 
-In the media server settings, enter the URLs the gateway uses to reach MediaMTX.
+In the media server settings, enter the URLs the gateway uses to reach MediaMTX, the `Public URL` browsers use, and the same `Auth Callback Key`. Streams are refused until the key is set.
 
 # Building
 

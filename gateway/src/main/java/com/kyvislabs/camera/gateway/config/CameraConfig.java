@@ -75,7 +75,7 @@ public record CameraConfig(
     @Description("Tag conditions that drop a bookmark on the timeline, in any record mode.")
     List<TagTrigger> bookmarkTriggers,
 
-    @Description("Roles allowed to watch live video. Empty = any authenticated session.")
+    @Description("Roles allowed to watch live video. Empty = any session of a project that shows the camera.")
     List<String> viewRoles,
 
     @Description("Roles allowed to view recordings. Empty = same as viewRoles.")

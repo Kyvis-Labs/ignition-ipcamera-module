@@ -14,6 +14,7 @@ import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Supplier;
 
 import com.inductiveautomation.ignition.common.gson.JsonArray;
 import com.inductiveautomation.ignition.common.gson.JsonElement;
@@ -33,10 +34,17 @@ public class MediaMtxClient {
     private final String apiUrl;
     private final String playbackUrl;
     private final String authHeader;
+    private final Supplier<String> playbackToken;
 
-    public MediaMtxClient(String apiUrl, String playbackUrl, String user, String password) {
+    /**
+     * @param playbackToken token appended to playback-server requests, which go through the
+     *                      same auth callback as browsers
+     */
+    public MediaMtxClient(String apiUrl, String playbackUrl, String user, String password,
+                          Supplier<String> playbackToken) {
         this.apiUrl = apiUrl;
         this.playbackUrl = playbackUrl;
+        this.playbackToken = playbackToken;
         this.authHeader = user == null || user.isBlank() ? null : "Basic " + Base64.getEncoder()
             .encodeToString((user + ":" + (password == null ? "" : password)).getBytes(StandardCharsets.UTF_8));
     }
@@ -77,6 +85,7 @@ public class MediaMtxClient {
         if (end != null) {
             q.append("&end=").append(enc(end.toString()));
         }
+        q.append("&token=").append(enc(playbackToken.get()));
         HttpResponse<String> r = request("GET", playbackUrl + q, null);
         if (r.statusCode() == 404) {
             return List.of();
@@ -128,7 +137,7 @@ public class MediaMtxClient {
 
     private HttpResponse<String> request(String method, String url, JsonObject body) throws IOException {
         HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(url)).timeout(TIMEOUT);
-        if (authHeader != null) {
+        if (authHeader != null && url.startsWith(apiUrl)) {
             b.header("Authorization", authHeader);
         }
         if (body != null) {

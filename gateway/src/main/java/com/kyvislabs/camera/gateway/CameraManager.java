@@ -19,6 +19,7 @@ import com.inductiveautomation.ignition.gateway.secrets.Plaintext;
 import com.inductiveautomation.ignition.gateway.secrets.Secret;
 import com.inductiveautomation.ignition.gateway.secrets.SecretConfig;
 import com.kyvislabs.camera.common.CameraModule;
+import com.kyvislabs.camera.gateway.auth.TokenService;
 import com.kyvislabs.camera.gateway.config.CameraConfig;
 import com.kyvislabs.camera.gateway.config.MediaServerConfig;
 import com.kyvislabs.camera.gateway.mediamtx.MediaMtxClient;
@@ -54,9 +55,18 @@ public class CameraManager {
     private final Set<String> recordingNow = ConcurrentHashMap.newKeySet();
     private final Map<String, String> lastError = new ConcurrentHashMap<>();
 
-    public CameraManager(GatewayContext context, StatusTags tags) {
+    private final TokenService tokens;
+    private volatile String callbackKey;
+
+    public CameraManager(GatewayContext context, StatusTags tags, TokenService tokens) {
         this.context = context;
         this.tags = tags;
+        this.tokens = tokens;
+    }
+
+    /** The shared key MediaMTX must present to the auth callback, or null if unset. */
+    public String callbackKey() {
+        return callbackKey;
     }
 
     public void startup() {
@@ -71,7 +81,11 @@ public class CameraManager {
         boolean intervalChanged = !config.reconcileIntervalSec().equals(server.reconcileIntervalSec());
         this.server = config;
         this.client = new MediaMtxClient(config.apiUrl(), config.playbackUrl(), config.apiUsername(),
-            reveal(config.apiPassword(), "media server API password"));
+            reveal(config.apiPassword(), "media server API password"), tokens::serviceToken);
+        this.callbackKey = reveal(config.authCallbackKey(), "media server auth callback key");
+        if (callbackKey == null) {
+            log.warn("No authCallbackKey on the media server config: every browser stream will be refused");
+        }
         if (intervalChanged) {
             scheduleReconcile();
         }
@@ -135,6 +149,7 @@ public class CameraManager {
     }
 
     private void reconcileSafely() {
+        tokens.purgeExpired();
         try {
             reconcile();
         } catch (Throwable t) {

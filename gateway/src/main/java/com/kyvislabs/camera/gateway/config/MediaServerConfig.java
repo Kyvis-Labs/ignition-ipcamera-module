@@ -32,6 +32,10 @@ public record MediaServerConfig(
 
     SecretConfig apiPassword,
 
+    @Description("Shared key MediaMTX sends to the gateway's auth callback "
+        + "(authHTTPAddress: http://<gateway>:8088/data/camera/auth?key=<this>).")
+    SecretConfig authCallbackKey,
+
     @Description("Seconds between reconciliations of camera paths against MediaMTX.")
     @DefaultValue("15")
     Integer reconcileIntervalSec,
@@ -43,7 +47,7 @@ public record MediaServerConfig(
     public static final ResourceType TYPE = new ResourceType(CameraModule.MODULE_ID, "media-server");
 
     public static final MediaServerConfig DEFAULT = new MediaServerConfig(
-        "http://mediamtx:9997", "http://mediamtx:9996", "https://cams.example.com", "", null, 15, 10);
+        "http://mediamtx:9997", "http://mediamtx:9996", "https://cams.example.com", "", null, null, 15, 10);
 
     public MediaServerConfig {
         apiUrl = stripSlash(apiUrl == null ? DEFAULT_API : apiUrl);
