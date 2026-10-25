@@ -1,12 +1,14 @@
 # Camera Module
 
-An Ignition module that manages IP cameras for Perspective. Cameras are configured on the gateway, and the module uses [MediaMTX](https://github.com/bluenviron/mediamtx) to pull and record their video. MediaMTX runs as a separate service.
+An Ignition module that adds IP camera live view, recording and playback to Perspective. Cameras are configured on the gateway and shown with the Camera View component. The module uses [MediaMTX](https://github.com/bluenviron/mediamtx) to pull, record and serve video. MediaMTX runs as a separate service.
 
 The Camera Module provides support for:
 
 1. Generic RTSP cameras and UniFi Protect RTSPS streams
 2. Off and continuous recording
-3. Status tags in a tag provider called `Cameras`
+3. Timeline playback
+4. Live video over WebRTC
+5. Status tags in a tag provider called `Cameras`
 
 Getting Started
 ---------------
@@ -15,6 +17,7 @@ Getting Started
 2. Build the module, see [Building](#building)
 3. Install the module into Ignition 8.3.9+. Start the gateway with `-Dignition.allowunsignedmodules=true`.
 4. Set the media server settings and add your cameras through the gateway REST API, under `/data/api/v1/resources/com.kyvislabs.camera/`
+5. Add a Camera View component to a Perspective view and enter the camera name
 
 # Architecture
 
@@ -22,6 +25,7 @@ Getting Started
 Browser (Perspective) ── websocket ──▶ Gateway (this module)
   │  asks for a stream                   checks roles, creates a token for one camera
   ├── WebRTC ─────────────────────────▶ MediaMTX
+  └── recordings ─────────────────────▶ MediaMTX
 
 Gateway ── control API ──▶ MediaMTX: adds a path for each camera and repairs them on a timer
 MediaMTX ── auth callback ──▶ Gateway: checks the token on each request
@@ -45,6 +49,26 @@ Each camera has `viewRoles` and `playbackRoles`. If empty, anyone who can open a
 |---|---|---|
 | `OFF` | Live only | - |
 | `CONTINUOUS` | Records everything | `retentionDays` |
+
+# Components
+
+## Camera View
+
+`kyvislabs.camera.view`
+
+| Prop | Default | Description |
+|---|---|---|
+| `camera` | `""` | Camera name |
+| `mode` | `live` | `live` or `playback` |
+| `playbackTime` | `null` | Time in epoch ms. Updates while playing, and writing it seeks. |
+| `quality` | `auto` | `auto`, `main` or `sub` |
+| `muted` | `true` | Mutes the audio |
+| `objectFit` | `contain` | `contain`, `cover` or `fill` |
+| `showStatus` | `true` | Shows the name over the video |
+| `showControls` | `true` | Shows the control bar |
+| `showTimeline` | `true` | Shows the timeline |
+
+Events: `onModeChange`.
 
 # Tags
 
@@ -85,8 +109,9 @@ In the media server settings, enter the URLs the gateway uses to reach MediaMTX,
 Requires JDK 17 and Node.js.
 
 ```
-./gradlew build     # Camera.unsigned.modl and unit tests
-scripts/deploy.sh   # build and load on the dev gateway
+./gradlew build      # Camera.unsigned.modl and unit tests
+scripts/deploy.sh    # build and load on the dev gateway
+scripts/harness.sh   # run the components without Perspective
 ```
 
 Unsigned modules need `-Dignition.allowunsignedmodules=true` on the gateway.

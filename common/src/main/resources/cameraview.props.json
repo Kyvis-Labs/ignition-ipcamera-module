@@ -3,8 +3,65 @@
   "properties": {
     "camera": {
       "type": "string",
-      "description": "Name of a camera configured on the gateway.",
+      "description": "Name of a camera configured on the gateway (Config > Cameras, or /data/api/v1/resources/.../com.kyvislabs.camera/camera).",
       "default": ""
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "live",
+        "playback"
+      ],
+      "description": "live, or playback of recordings at playbackTime. The component's own Live / back-30s / timeline controls write this.",
+      "default": "live"
+    },
+    "playbackTime": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "format": "date",
+      "description": "Playback position (epoch ms). Written back about once a second while playing; writing it seeks.",
+      "default": null
+    },
+    "quality": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "main",
+        "sub"
+      ],
+      "description": "Which stream to show. auto uses the substream when the component is rendered at 720px wide or less.",
+      "default": "auto"
+    },
+    "muted": {
+      "type": "boolean",
+      "description": "Mute audio. Browsers block autoplay with sound, so unmuting needs a user gesture.",
+      "default": true
+    },
+    "objectFit": {
+      "type": "string",
+      "enum": [
+        "contain",
+        "cover",
+        "fill"
+      ],
+      "default": "contain"
+    },
+    "showStatus": {
+      "type": "boolean",
+      "description": "Show the camera name and connection state overlay.",
+      "default": true
+    },
+    "showControls": {
+      "type": "boolean",
+      "description": "Show Live / back-30s / play / speed / range controls.",
+      "default": true
+    },
+    "showTimeline": {
+      "type": "boolean",
+      "description": "Show the recording timeline under the video.",
+      "default": true
     }
   }
 }

@@ -1,23 +1,179 @@
 import * as React from "react";
 import {
+    AbstractUIElementStore,
     ComponentMeta,
     ComponentProps,
+    ComponentStoreDelegate,
     PComponent,
     PropertyTree,
 } from "@inductiveautomation/perspective-client";
+import { CameraDelegate, liveUrl, playbackUrl, toMs } from "../delegate";
+import { LivePlayer, LiveState } from "../player/LivePlayer";
+import { PlaybackPlayer } from "../player/PlaybackPlayer";
+import { TimelineBar } from "../player/TimelineBar";
+import { StatusBadge } from "./StatusBadge";
+import { useTimelines } from "./useTimeline";
+import { Controls, ZOOMS } from "./Controls";
 
 export const COMPONENT_TYPE = "kyvislabs.camera.view";
 
+type Quality = "auto" | "main" | "sub";
+type Mode = "live" | "playback";
+
 interface CameraViewProps {
     camera: string;
+    mode: Mode;
+    playbackTime: number | null;
+    quality: Quality;
+    muted: boolean;
+    objectFit: "contain" | "cover" | "fill";
+    showStatus: boolean;
+    showControls: boolean;
+    showTimeline: boolean;
 }
 
+/** Below this rendered width, "auto" uses the substream. */
+const SUB_MAX_WIDTH = 720;
+const REWIND_MS = 30000;
+
 export function CameraView(props: ComponentProps<CameraViewProps>) {
-    // The root element must take emit(): it carries the ref, position, style
-    // and event wiring Perspective's containers rely on.
+    const p = props.props;
+    const { camera } = p;
+    const delegate = props.store.delegate as CameraDelegate | undefined;
+    const [width, setWidth] = React.useState(0);
+    const [liveState, setLiveState] = React.useState<{ s: LiveState; detail?: string }>({ s: "idle" });
+    const [pbState, setPbState] = React.useState<{ s: string; detail?: string }>({ s: "loading" });
+
+    // playback state; the props are the source of truth for mode/time set from outside
+    const [seek, setSeek] = React.useState({ to: Date.now() - REWIND_MS, nonce: 0 });
+    const [playing, setPlaying] = React.useState(true);
+    const [rate, setRate] = React.useState(1);
+    const [shown, setShown] = React.useState<number | null>(null);
+    const [zoomMs, setZoomMs] = React.useState(ZOOMS[0].ms);
+    const [viewEnd, setViewEnd] = React.useState(Date.now());
+    const [follow, setFollow] = React.useState(true);
+    const lastWritten = React.useRef<number | null>(null);
+
+    React.useEffect(() => {
+        const el = props.store.element as HTMLElement | undefined;
+        if (!el || typeof ResizeObserver === "undefined") {
+            return;
+        }
+        const ro = new ResizeObserver(entries => setWidth(entries[0].contentRect.width));
+        ro.observe(el);
+        return () => ro.disconnect();
+    }, [props.store.element]);
+
+    // keep the live edge of the timeline moving
+    React.useEffect(() => {
+        if (!follow) {
+            return;
+        }
+        const id = setInterval(() => setViewEnd(Date.now()), 5000);
+        return () => clearInterval(id);
+    }, [follow]);
+
+    // An externally written playbackTime is a seek. Adjusted during render (not in an effect)
+    // so the player mounts with the right target instead of loading a stale window first.
+    const propTime = toMs(p.playbackTime);
+    if (p.mode === "playback" && propTime !== null && propTime !== lastWritten.current && propTime !== seek.to) {
+        setSeek({ to: propTime, nonce: seek.nonce + 1 });
+    }
+
+    const write = (key: string, value: unknown) => props.store.props.write(key, value);
+    const goPlayback = (t: number) => {
+        lastWritten.current = Math.round(t);
+        write("playbackTime", lastWritten.current);
+        write("mode", "playback");
+        setSeek(s => ({ to: t, nonce: s.nonce + 1 }));
+        setPlaying(true);
+        props.componentEvents.fireComponentEvent("onModeChange", { mode: "playback", time: t });
+    };
+    const goLive = () => {
+        write("mode", "live");
+        setFollow(true);
+        setViewEnd(Date.now());
+        props.componentEvents.fireComponentEvent("onModeChange", { mode: "live", time: Date.now() });
+    };
+
+    const timeline = useTimelines(p.showTimeline || p.mode === "playback" ? delegate : undefined, camera ? [camera] : [], viewEnd, zoomMs);
+    const spans = timeline[camera]?.spans ?? [];
+
+    const effective: "main" | "sub" = p.quality === "auto" ? (width > 0 && width <= SUB_MAX_WIDTH ? "sub" : "main") : p.quality;
+    const resolveUrl = React.useMemo(
+        () => (camera && delegate ? () => liveUrl(delegate, camera, effective) : null),
+        [camera, delegate, effective]
+    );
+    const windowUrl = React.useCallback(
+        (start: number, dur: number) => playbackUrl(delegate!, camera, start, dur),
+        [delegate, camera]
+    );
+
+    const onTime = React.useCallback((t: number) => {
+        setShown(t);
+        // write back at most once a second so bindings see the position without flooding
+        if (lastWritten.current === null || Math.abs(t - lastWritten.current) >= 1000) {
+            lastWritten.current = Math.round(t);
+            props.store.props.write("playbackTime", lastWritten.current);
+        }
+        // keep the playhead in view while playing
+        setViewEnd(v => (t > v - zoomMs * 0.05 || t < v - zoomMs ? Math.min(Date.now(), t + zoomMs * 0.5) : v));
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [zoomMs]);
+
+    const live = p.mode !== "playback";
+    const badgeState: LiveState = !camera ? "error" : live ? liveState.s
+        : pbState.s === "playing" ? "live" : pbState.s === "error" ? "error" : "connecting";
+    const badgeDetail = !camera ? "no camera set" : live ? liveState.detail
+        : pbState.s === "gap" ? "skipped a gap in the recording" : pbState.s === "end" ? "end of recording" : pbState.detail;
+
     return (
-        <div {...props.emit({ classes: ["kyvis-camera-view"] })}>
-            camera: {props.props.camera || "(none)"}
+        <div {...props.emit({ classes: ["kyvis-camera-view"], style: { display: "flex", flexDirection: "column", background: "#000", overflow: "hidden" } })}>
+            <div style={{ position: "relative", flex: "1 1 auto", minHeight: 0 }}>
+                {live ? (
+                    <LivePlayer resolveUrl={resolveUrl} streamKey={`${camera}|${effective}`} muted={p.muted} objectFit={p.objectFit}
+                        onState={(s, detail) => setLiveState({ s, detail })} />
+                ) : (
+                    <PlaybackPlayer windowUrl={windowUrl} spans={spans} seekTo={seek.to} seekNonce={seek.nonce}
+                        playing={playing} rate={rate} objectFit={p.objectFit} onTime={onTime}
+                        onState={(s, detail) => {
+                            setPbState({ s, detail });
+                            if (s === "liveEdge") {
+                                goLive();
+                            }
+                        }} />
+                )}
+                {p.showStatus && (
+                    <StatusBadge camera={camera} state={badgeState} detail={badgeDetail}
+                        extra={live ? (liveState.s === "live" ? "LIVE" : undefined) : shown ? new Date(shown).toLocaleString() : undefined} />
+                )}
+            </div>
+            {p.showControls && (
+                <Controls
+                    live={live}
+                    playing={playing}
+                    rate={rate}
+                    zoomMs={zoomMs}
+                    onLive={goLive}
+                    onRewind={() => goPlayback((live ? Date.now() : shown ?? Date.now()) - REWIND_MS)}
+                    onPlayPause={() => setPlaying(x => !x)}
+                    onRate={setRate}
+                    onZoom={z => setZoomMs(z)}
+                />
+            )}
+            {p.showTimeline && (
+                <TimelineBar
+                    spans={spans}
+                    playhead={live ? null : shown}
+                    zoomMs={zoomMs}
+                    viewEnd={viewEnd}
+                    onSeek={goPlayback}
+                    onPan={v => {
+                        setFollow(v >= Date.now() - 1000);
+                        setViewEnd(v);
+                    }}
+                />
+            )}
         </div>
     );
 }
@@ -28,14 +184,28 @@ export class CameraViewMeta implements ComponentMeta {
     }
 
     getDefaultSize(): { width: number; height: number } {
-        return { width: 480, height: 270 };
+        return { width: 640, height: 420 };
     }
 
     getViewComponent(): PComponent {
         return CameraView as PComponent;
     }
 
+    createDelegate(component: AbstractUIElementStore): ComponentStoreDelegate {
+        return new CameraDelegate(component);
+    }
+
     getPropsReducer(tree: PropertyTree): CameraViewProps {
-        return { camera: tree.readString("camera", "") };
+        return {
+            camera: tree.readString("camera", ""),
+            mode: (tree.readString("mode", "live") === "playback" ? "playback" : "live"),
+            playbackTime: tree.read("playbackTime", null),
+            quality: tree.readString("quality", "auto") as Quality,
+            muted: tree.readBoolean("muted", true),
+            objectFit: tree.readString("objectFit", "contain") as CameraViewProps["objectFit"],
+            showStatus: tree.readBoolean("showStatus", true),
+            showControls: tree.readBoolean("showControls", true),
+            showTimeline: tree.readBoolean("showTimeline", true),
+        };
     }
 }

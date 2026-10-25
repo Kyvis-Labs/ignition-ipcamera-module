@@ -1,0 +1,7 @@
+{
+  "type": "object",
+  "properties": {
+    "mode": {"type": "string", "description": "live or playback"},
+    "time": {"type": "number", "description": "Epoch ms the view switched to"}
+  }
+}

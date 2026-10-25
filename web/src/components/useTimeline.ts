@@ -1,0 +1,40 @@
+import * as React from "react";
+import { CameraDelegate, timelines, TimelineResult } from "../delegate";
+
+const REFRESH_MS = 30000;
+
+/**
+ * Recorded spans for some cameras over [viewEnd - zoomMs, viewEnd], refreshed periodically
+ * so a live-following timeline keeps growing. Fetches a margin either side so small pans do
+ * not refetch.
+ */
+export function useTimelines(delegate: CameraDelegate | undefined, cameras: string[], viewEnd: number, zoomMs: number) {
+    const [data, setData] = React.useState<Record<string, TimelineResult>>({});
+    const key = cameras.join("\u0000");
+    // quantise so panning by a few pixels does not trigger a fetch
+    const bucket = Math.ceil(viewEnd / (zoomMs / 4));
+    const [tick, setTick] = React.useState(0);
+
+    React.useEffect(() => {
+        const id = setInterval(() => setTick(t => t + 1), REFRESH_MS);
+        return () => clearInterval(id);
+    }, []);
+
+    React.useEffect(() => {
+        if (!delegate || cameras.length === 0) {
+            return;
+        }
+        let cancelled = false;
+        const end = Math.min(Date.now(), bucket * (zoomMs / 4) + zoomMs / 2);
+        const start = end - zoomMs * 2;
+        timelines(delegate, cameras, start, end)
+            .then(t => !cancelled && setData(t))
+            .catch(e => !cancelled && setData(Object.fromEntries(cameras.map(c => [c, { spans: [], error: (e as Error).message }]))));
+        return () => {
+            cancelled = true;
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [delegate, key, bucket, zoomMs, tick]);
+
+    return data;
+}
