@@ -21,6 +21,7 @@ import com.inductiveautomation.ignition.gateway.secrets.SecretConfig;
 import com.kyvislabs.camera.common.CameraModule;
 import com.kyvislabs.camera.gateway.auth.TokenService;
 import com.kyvislabs.camera.gateway.config.CameraConfig;
+import com.kyvislabs.camera.gateway.events.EventService;
 import com.kyvislabs.camera.gateway.config.MediaServerConfig;
 import com.kyvislabs.camera.gateway.mediamtx.MediaMtxClient;
 import com.kyvislabs.camera.gateway.mediamtx.PathConfigs;
@@ -57,6 +58,11 @@ public class CameraManager {
 
     private final TokenService tokens;
     private volatile String callbackKey;
+    private volatile EventService events;
+
+    public void setEvents(EventService events) {
+        this.events = events;
+    }
 
     public CameraManager(GatewayContext context, StatusTags tags, TokenService tokens) {
         this.context = context;
@@ -107,6 +113,9 @@ public class CameraManager {
         this.cameras = Map.copyOf(next);
         this.camerasLoaded = true;
         tags.syncCameras(next);
+        if (events != null) {
+            events.sync(this.cameras);
+        }
         triggerReconcile();
     }
 
@@ -150,6 +159,9 @@ public class CameraManager {
 
     private void reconcileSafely() {
         tokens.purgeExpired();
+        if (events != null) {
+            events.tick();
+        }
         try {
             reconcile();
         } catch (Throwable t) {
@@ -235,7 +247,22 @@ public class CameraManager {
             JsonObject main = runtime.get(PathConfigs.mainPath(name));
             String err = failed.contains(name) ? lastError.get(PathConfigs.mainPath(name)) : null;
             tags.cameraStatus(name, main, runtime.get(PathConfigs.subPath(name)), err);
+            tags.setRecording(name, recording(name, main));
         }
+    }
+
+    /** Whether video for this camera is being kept right now. */
+    public boolean recording(String name, JsonObject main) {
+        CameraConfig cfg = cameras.get(name);
+        boolean online = main != null && main.has("ready") && main.get("ready").getAsBoolean();
+        if (cfg == null || !online) {
+            return false;
+        }
+        return switch (cfg.recordMode()) {
+            case CONTINUOUS -> true;
+            case OFF -> false;
+            default -> events != null && events.recording(name);
+        };
     }
 
     /** Codec names of a runtime path's tracks, e.g. "H264" or "H265, MPEG-4 Audio". */

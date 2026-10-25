@@ -36,6 +36,10 @@ public record MediaServerConfig(
         + "(authHTTPAddress: http://<gateway>:8088/data/camera/auth?key=<this>).")
     SecretConfig authCallbackKey,
 
+    @Description("Folder for event clips, bookmarks and exports. Blank = <gateway data>/camera. "
+        + "Read at module startup.")
+    String storagePath,
+
     @Description("Seconds between reconciliations of camera paths against MediaMTX.")
     @DefaultValue("15")
     Integer reconcileIntervalSec,
@@ -47,12 +51,13 @@ public record MediaServerConfig(
     public static final ResourceType TYPE = new ResourceType(CameraModule.MODULE_ID, "media-server");
 
     public static final MediaServerConfig DEFAULT = new MediaServerConfig(
-        "http://mediamtx:9997", "http://mediamtx:9996", "https://cams.example.com", "", null, null, 15, 10);
+        "http://mediamtx:9997", "http://mediamtx:9996", "https://cams.example.com", "", null, null, "", 15, 10);
 
     public MediaServerConfig {
         apiUrl = stripSlash(apiUrl == null ? DEFAULT_API : apiUrl);
         playbackUrl = stripSlash(playbackUrl == null ? DEFAULT_PLAYBACK : playbackUrl);
         publicUrl = stripSlash(publicUrl == null ? "" : publicUrl);
+        storagePath = storagePath == null ? "" : storagePath.trim();
         reconcileIntervalSec = reconcileIntervalSec == null ? 15 : Math.max(2, reconcileIntervalSec);
         segmentMinutes = segmentMinutes == null ? 10 : Math.max(1, segmentMinutes);
     }

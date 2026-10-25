@@ -1,0 +1,14 @@
+{
+  "type": "object",
+  "properties": {
+    "camera": {
+      "type": "string"
+    },
+    "time": {
+      "type": "number"
+    },
+    "id": {
+      "type": "string"
+    }
+  }
+}

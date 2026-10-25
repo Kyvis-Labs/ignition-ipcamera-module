@@ -5,10 +5,11 @@ An Ignition module that adds IP camera live view, recording and playback to Pers
 The Camera Module provides support for:
 
 1. Generic RTSP cameras and UniFi Protect RTSPS streams
-2. Off and continuous recording
-3. Timeline playback
+2. Off, continuous and tag driven recording, with pre-roll and post-roll
+3. Timeline playback, bookmarks and event clips
 4. Live video over WebRTC
 5. Status tags in a tag provider called `Cameras`
+6. Scripting through `system.camera`
 
 Getting Started
 ---------------
@@ -49,6 +50,16 @@ Each camera has `viewRoles` and `playbackRoles`. If empty, anyone who can open a
 |---|---|---|
 | `OFF` | Live only | - |
 | `CONTINUOUS` | Records everything | `retentionDays` |
+| `TAG` with pre-roll | Records to a rolling buffer and copies each event out as a clip | `eventRetentionDays` |
+| `TAG` without pre-roll | Starts recording when triggered, about 1-2 seconds late | `eventRetentionDays` |
+
+An event starts `preRollSec` before the first trigger and ends `postRollSec` after the last trigger clears. Long events are split every hour.
+
+> **Note:** Retention is per camera. Switching a camera from `CONTINUOUS` to `TAG` applies the shorter buffer retention to its existing recordings.
+
+**TAG conditions:** `true`, `false`, `> n`, `>= n`, `< n`, `<= n`, `= v`, `!= v`. Blank means truthy.
+
+Tag driven bookmarks work in any record mode.
 
 # Components
 
@@ -67,8 +78,9 @@ Each camera has `viewRoles` and `playbackRoles`. If empty, anyone who can open a
 | `showStatus` | `true` | Shows the name over the video |
 | `showControls` | `true` | Shows the control bar |
 | `showTimeline` | `true` | Shows the timeline |
+| `allowBookmarks` | `true` | Shows the bookmark button |
 
-Events: `onModeChange`.
+Events: `onModeChange`, `onBookmark` and `onMarkerClick`.
 
 # Tags
 
@@ -80,7 +92,24 @@ The module creates a tag provider called `Cameras`.
 | `<camera>/Online`, `<camera>/SubOnline` | Stream state |
 | `<camera>/Recording`, `<camera>/RecordMode` | Recording state |
 | `<camera>/Readers`, `<camera>/BytesReceived` | Stream usage |
-| `<camera>/Codecs`, `<camera>/LastError` | Stream details |
+| `<camera>/Codecs`, `<camera>/LastError`, `<camera>/LastEventStart` | Stream details |
+
+# Scripting
+
+Functions are in gateway scope. Times are Dates or epoch ms.
+
+```python
+system.camera.getCameras()
+system.camera.getStatus("front")
+system.camera.getRecordings("front", start, end)
+system.camera.exportClip("front", start, end)
+
+system.camera.getEvents("front", start, end)
+system.camera.startRecording("front", "Line stopped")
+system.camera.stopRecording("front")
+system.camera.addBookmark("front", "Operator note")
+system.camera.addBookmark("front", "Batch 42", start, end, True)
+```
 
 # MediaMTX
 

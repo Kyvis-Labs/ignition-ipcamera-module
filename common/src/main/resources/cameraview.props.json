@@ -62,6 +62,11 @@
       "type": "boolean",
       "description": "Show the recording timeline under the video.",
       "default": true
+    },
+    "allowBookmarks": {
+      "type": "boolean",
+      "description": "Show the bookmark (\u2605) button. Bookmarks are attributed to the session user.",
+      "default": true
     }
   }
 }

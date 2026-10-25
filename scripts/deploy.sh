@@ -24,7 +24,7 @@ echo "waiting for the camera module to start..."
 for _ in $(seq 1 90); do
   logs="$(docker compose -f "$stack/docker-compose.yml" logs --since "$since" ignition 2>&1)"
   if grep -q "Camera module started" <<<"$logs"; then
-    grep -E "camera\.|com\.kyvislabs\.camera" <<<"$logs" | tail -20
+    grep -E "CameraManager|GatewayHook|EventService|kyvislabs\.camera" <<<"$logs" | tail -20
     exit 0
   fi
   if grep -qiE "Error starting up module.*(camera|Camera)|com\.kyvislabs\.camera.*(Exception|Error)" <<<"$logs"; then

@@ -7,10 +7,10 @@ import {
     PComponent,
     PropertyTree,
 } from "@inductiveautomation/perspective-client";
-import { CameraDelegate, liveUrl, playbackUrl, toMs } from "../delegate";
+import { addBookmark, CameraDelegate, liveUrl, playbackWindow, toMs } from "../delegate";
 import { LivePlayer, LiveState } from "../player/LivePlayer";
 import { PlaybackPlayer } from "../player/PlaybackPlayer";
-import { TimelineBar } from "../player/TimelineBar";
+import { Marker, TimelineBar } from "../player/TimelineBar";
 import { StatusBadge } from "./StatusBadge";
 import { useTimelines } from "./useTimeline";
 import { Controls, ZOOMS } from "./Controls";
@@ -30,6 +30,7 @@ interface CameraViewProps {
     showStatus: boolean;
     showControls: boolean;
     showTimeline: boolean;
+    allowBookmarks: boolean;
 }
 
 /** Below this rendered width, "auto" uses the substream. */
@@ -96,8 +97,12 @@ export function CameraView(props: ComponentProps<CameraViewProps>) {
         props.componentEvents.fireComponentEvent("onModeChange", { mode: "live", time: Date.now() });
     };
 
-    const timeline = useTimelines(p.showTimeline || p.mode === "playback" ? delegate : undefined, camera ? [camera] : [], viewEnd, zoomMs);
+    const [refresh, setRefresh] = React.useState(0);
+    const timeline = useTimelines(p.showTimeline || p.mode === "playback" ? delegate : undefined, camera ? [camera] : [], viewEnd, zoomMs, refresh);
     const spans = timeline[camera]?.spans ?? [];
+    const markers: Marker[] = React.useMemo(() => (timeline[camera]?.markers ?? []).map(m => ({
+        t: m.t, end: m.end, label: m.label || (m.kind === "event" ? "event" : "bookmark"), kind: m.kind,
+    })), [timeline, camera]);
 
     const effective: "main" | "sub" = p.quality === "auto" ? (width > 0 && width <= SUB_MAX_WIDTH ? "sub" : "main") : p.quality;
     const resolveUrl = React.useMemo(
@@ -105,9 +110,22 @@ export function CameraView(props: ComponentProps<CameraViewProps>) {
         [camera, delegate, effective]
     );
     const windowUrl = React.useCallback(
-        (start: number, dur: number) => playbackUrl(delegate!, camera, start, dur),
+        (start: number, dur: number) => playbackWindow(delegate!, camera, start, dur),
         [delegate, camera]
     );
+    const bookmark = async () => {
+        if (!delegate || !camera) {
+            return;
+        }
+        const t = live ? Date.now() : shown ?? Date.now();
+        try {
+            const b = await addBookmark(delegate, camera, t, "");
+            props.componentEvents.fireComponentEvent("onBookmark", { camera, time: b.t, id: b.id });
+            setRefresh(r => r + 1);
+        } catch (e) {
+            setPbState({ s: "error", detail: (e as Error).message });
+        }
+    };
 
     const onTime = React.useCallback((t: number) => {
         setShown(t);
@@ -159,11 +177,17 @@ export function CameraView(props: ComponentProps<CameraViewProps>) {
                     onPlayPause={() => setPlaying(x => !x)}
                     onRate={setRate}
                     onZoom={z => setZoomMs(z)}
+                    onBookmark={p.allowBookmarks ? bookmark : undefined}
                 />
             )}
             {p.showTimeline && (
                 <TimelineBar
                     spans={spans}
+                    markers={markers}
+                    onMarker={m => {
+                        props.componentEvents.fireComponentEvent("onMarkerClick", { kind: m.kind, time: m.t, label: m.label });
+                        goPlayback(m.t);
+                    }}
                     playhead={live ? null : shown}
                     zoomMs={zoomMs}
                     viewEnd={viewEnd}
@@ -206,6 +230,7 @@ export class CameraViewMeta implements ComponentMeta {
             showStatus: tree.readBoolean("showStatus", true),
             showControls: tree.readBoolean("showControls", true),
             showTimeline: tree.readBoolean("showTimeline", true),
+            allowBookmarks: tree.readBoolean("allowBookmarks", true),
         };
     }
 }

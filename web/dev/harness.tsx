@@ -48,10 +48,13 @@ class HarnessDelegate extends CameraDelegate {
                 const streams: any = {};
                 for (const camera of payload.cameras) {
                     const q = new URLSearchParams({ path: `cam/${camera}`, start: new Date(payload.start).toISOString(), duration: String(payload.duration), format: "mp4", token: cameras[camera].playback });
-                    streams[camera] = { url: `${base}/get?${q}` };
+                    streams[camera] = { url: `${base}/get?${q}`, start: payload.start, duration: payload.duration };
                 }
                 return { ok: true, streams };
             }
+        }
+        if (op === "bookmark") {
+            return { ok: true, bookmark: { id: String(Date.now()), kind: "bookmark", t: payload.time, label: "", source: "user" } };
         }
         throw new Error("unknown op " + op);
     }
@@ -72,7 +75,7 @@ function App({ tokens }: { tokens: Tokens }) {
     const [el, setEl] = React.useState<HTMLElement | null>(null);
     const [vprops, setVprops] = React.useState<any>({
         camera: Object.keys(tokens.cameras)[0], mode: "live", playbackTime: null, quality: "auto",
-        muted: true, objectFit: "contain", showStatus: true, showControls: true, showTimeline: true,
+        muted: true, objectFit: "contain", showStatus: true, showControls: true, showTimeline: true, allowBookmarks: true,
     });
     React.useEffect(() => setEl(host.current), []);
     (window as any).__harness = { set: (k: string, v: unknown) => setVprops((p: any) => ({ ...p, [k]: v })), get: () => vprops };

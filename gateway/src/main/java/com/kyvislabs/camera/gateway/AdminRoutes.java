@@ -2,6 +2,7 @@ package com.kyvislabs.camera.gateway;
 
 import java.time.Duration;
 import java.util.Set;
+import java.util.function.Supplier;
 
 import com.inductiveautomation.ignition.common.gson.JsonObject;
 import com.inductiveautomation.ignition.common.gson.JsonParser;
@@ -10,6 +11,7 @@ import com.inductiveautomation.ignition.gateway.dataroutes.PermissionType;
 import com.inductiveautomation.ignition.gateway.dataroutes.RouteGroup;
 import com.kyvislabs.camera.gateway.auth.TokenService;
 import com.kyvislabs.camera.gateway.config.CameraConfig;
+import com.kyvislabs.camera.gateway.events.CameraEvent;
 import com.kyvislabs.camera.gateway.mediamtx.PathConfigs;
 import jakarta.servlet.http.HttpServletResponse;
 
@@ -21,19 +23,23 @@ import jakarta.servlet.http.HttpServletResponse;
  *   <li>{@code GET /data/camera/status} -- every camera with its stream state.</li>
  *   <li>{@code POST /data/camera/token} {@code {camera, quality?, action?: "read"|"playback",
  *   ttlSec?}} -- stream URLs plus a scoped token, for clients outside Perspective.</li>
+ *   <li>{@code POST /data/camera/event} {@code {camera, on, label?}} -- holds an EVENT/TAG
+ *   camera's event open while {@code on}; the post-roll starts when released.</li>
+ *   <li>{@code POST /data/camera/bookmark} {@code {camera, label?, start?, end?, protect?}}
+ *   (epoch ms; default now-10 s .. now+10 s).</li>
  * </ul>
  */
 public final class AdminRoutes {
     private AdminRoutes() {
     }
 
-    public static void mount(RouteGroup routes, CameraServices services) {
+    public static void mount(RouteGroup routes, Supplier<CameraServices> ref) {
         routes.newRoute("/status")
             .method(HttpMethod.GET)
             .requirePermission(PermissionType.READ)
             .type(RouteGroup.TYPE_JSON)
             .nocache()
-            .handler((req, res) -> status(services))
+            .handler((req, res) -> status(ref.get()))
             .mount();
 
         routes.newRoute("/token")
@@ -42,6 +48,7 @@ public final class AdminRoutes {
             .type(RouteGroup.TYPE_JSON)
             .nocache()
             .handler((req, res) -> {
+                CameraServices services = ref.get();
                 JsonObject body = JsonParser.parseString(req.readBody()).getAsJsonObject();
                 String camera = body.get("camera").getAsString();
                 CameraConfig cfg = services.manager().camera(camera).orElse(null);
@@ -70,6 +77,46 @@ public final class AdminRoutes {
                 return out;
             })
             .mount();
+
+        mountActions(routes, ref);
+    }
+
+    private static void mountActions(RouteGroup routes, Supplier<CameraServices> ref) {
+        routes.newRoute("/event")
+            .method(HttpMethod.POST)
+            .requirePermission(PermissionType.WRITE)
+            .type(RouteGroup.TYPE_JSON)
+            .nocache()
+            .handler((req, res) -> {
+                JsonObject body = JsonParser.parseString(req.readBody()).getAsJsonObject();
+                String camera = body.get("camera").getAsString();
+                boolean on = body.get("on").getAsBoolean();
+                String label = body.has("label") ? body.get("label").getAsString() : "api";
+                ref.get().events().trigger(camera, on, label, "api");
+                JsonObject out = new JsonObject();
+                out.addProperty("recording", ref.get().events().recording(camera));
+                return out;
+            })
+            .mount();
+
+        routes.newRoute("/bookmark")
+            .method(HttpMethod.POST)
+            .requirePermission(PermissionType.WRITE)
+            .type(RouteGroup.TYPE_JSON)
+            .nocache()
+            .handler((req, res) -> {
+                JsonObject body = JsonParser.parseString(req.readBody()).getAsJsonObject();
+                long now = System.currentTimeMillis();
+                long start = body.has("start") ? body.get("start").getAsLong() : now - 10_000;
+                long end = body.has("end") ? body.get("end").getAsLong() : now + 10_000;
+                CameraEvent b = ref.get().events().addBookmark(body.get("camera").getAsString(),
+                    body.has("label") ? body.get("label").getAsString() : "", start, end,
+                    body.has("protect") && body.get("protect").getAsBoolean(), req.getActor(), "api");
+                JsonObject out = new JsonObject();
+                out.addProperty("id", b.id());
+                return out;
+            })
+            .mount();
     }
 
     static JsonObject status(CameraServices services) {
@@ -87,6 +134,7 @@ public final class AdminRoutes {
             c.addProperty("subOnline", sub != null && sub.get("ready").getAsBoolean());
             c.addProperty("codecs", CameraManager.codecs(main));
             c.addProperty("readers", main != null && main.has("readers") ? main.getAsJsonArray("readers").size() : 0);
+            c.addProperty("recording", m.recording(name, main));
             cams.add(name, c);
         });
         out.add("cameras", cams);

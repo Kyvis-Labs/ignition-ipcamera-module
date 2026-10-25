@@ -125,6 +125,7 @@ public record CameraConfig(
             v.checkField(c.retentionDays() >= 1, "retentionDays", "retentionDays must be at least 1");
             v.checkField(c.preRollSec() >= 0 && c.postRollSec() >= 0,
                 "preRollSec", "pre/post roll cannot be negative");
+            v.checkField(c.bufferRetentionMin() >= 2, "bufferRetentionMin", "bufferRetentionMin must be at least 2");
             v.checkField(c.preRollSec() <= c.bufferRetentionMin() * 60,
                 "preRollSec", "preRollSec cannot exceed the rolling buffer");
             v.checkField(c.recordMode() != RecordMode.TAG || !c.recordTriggers().isEmpty(),

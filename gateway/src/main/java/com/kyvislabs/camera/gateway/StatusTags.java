@@ -20,7 +20,8 @@ import com.kyvislabs.camera.gateway.config.CameraConfig;
  *
  * <pre>
  * [Cameras]MediaServer/Online, LastError
- * [Cameras]&lt;camera&gt;/Online, SubOnline, Recording, RecordMode, Readers, BytesReceived, Codecs, LastError
+ * [Cameras]&lt;camera&gt;/Online, SubOnline, Recording, RecordMode, Readers, BytesReceived, Codecs, LastError,
+ *                    LastEventStart
  * </pre>
  */
 public class StatusTags {
@@ -29,6 +30,7 @@ public class StatusTags {
     private static final String[][] CAMERA_TAGS = {
         {"Online", "bool"}, {"SubOnline", "bool"}, {"Recording", "bool"}, {"RecordMode", "str"},
         {"Readers", "int"}, {"BytesReceived", "long"}, {"Codecs", "str"}, {"LastError", "str"},
+        {"LastEventStart", "date"},
     };
 
     private final ManagedTagProvider provider;
@@ -63,6 +65,7 @@ public class StatusTags {
                         case "bool" -> DataType.Boolean;
                         case "int" -> DataType.Int4;
                         case "long" -> DataType.Int8;
+                        case "date" -> DataType.DateTime;
                         default -> DataType.String;
                     });
                 }
@@ -95,6 +98,10 @@ public class StatusTags {
 
     public void setRecording(String camera, boolean recording) {
         set(camera + "/Recording", recording);
+    }
+
+    public void lastEventStart(String camera, long ms) {
+        set(camera + "/LastEventStart", new java.util.Date(ms));
     }
 
     public void shutdown() {

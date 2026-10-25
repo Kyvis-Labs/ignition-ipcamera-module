@@ -4,8 +4,11 @@ import * as React from "react";
 export type Spans = Array<[number, number]>;
 
 export interface PlaybackPlayerProps {
-    /** Returns a URL serving [startMs, startMs + durationSec] as one MP4. */
-    windowUrl: (startMs: number, durationSec: number) => Promise<string>;
+    /**
+     * Resolves a window covering startMs. The window may begin earlier than asked (an exported
+     * clip starts at its event), in which case the player seeks into it.
+     */
+    windowUrl: (startMs: number, durationSec: number) => Promise<{ url: string; startMs: number; durationSec: number }>;
     spans: Spans;
     /** Changing this (or seekNonce) jumps playback to that time. */
     seekTo: number;
@@ -116,12 +119,18 @@ export function PlaybackPlayer(props: PlaybackPlayerProps) {
         st.current.win[slot] = win;
         debug("load", { slot, seq, start: new Date(win.startMs).toISOString(), dur: win.durationSec, autoplay, active: st.current.active });
         try {
-            const url = await latest.current.windowUrl(win.startMs, win.durationSec);
+            const res = await latest.current.windowUrl(win.startMs, win.durationSec);
             if (seq !== st.current.loadSeq && slot === st.current.active) {
                 return;
             }
-            el.src = url;
+            const offsetSec = Math.max(0, (win.startMs - res.startMs) / 1000);
+            st.current.win[slot] = { startMs: res.startMs, durationSec: res.durationSec };
+            el.src = res.url;
             el.playbackRate = latest.current.rate;
+            if (offsetSec > 0.05) {
+                await new Promise<void>(resolve => el.addEventListener("loadedmetadata", () => resolve(), { once: true }));
+                el.currentTime = offsetSec;
+            }
             if (autoplay) {
                 await el.play().catch(() => undefined);
             }
@@ -185,7 +194,10 @@ export function PlaybackPlayer(props: PlaybackPlayerProps) {
                 p.onTime?.(now);
             }
             const other: 0 | 1 = slot === 0 ? 1 : 0;
-            const winEnd = win.startMs + win.durationSec * 1000;
+            // the real media length, not the requested one: MediaMTX ends a window early at a
+            // gap in the recording, and the next window must start where this one really ends
+            const mediaSec = isFinite(el.duration) && el.duration > 0 ? el.duration : win.durationSec;
+            const winEnd = win.startMs + mediaSec * 1000;
             if (!st.current.win[other] && el.duration - el.currentTime < PRELOAD_BEFORE_END_SEC) {
                 const next = windowFor(p.spans, winEnd);
                 if (next) {
@@ -209,7 +221,7 @@ export function PlaybackPlayer(props: PlaybackPlayerProps) {
             const other: 0 | 1 = slot === 0 ? 1 : 0;
             if (st.current.win[other]) {
                 const done = st.current.win[slot]!;
-                const prevEnd = done.startMs + done.durationSec * 1000;
+                const prevEnd = done.startMs + els()[slot].duration * 1000;
                 st.current.active = other;
                 setActive(other);
                 const next = els()[other];
@@ -221,7 +233,14 @@ export function PlaybackPlayer(props: PlaybackPlayerProps) {
                 }
             } else {
                 const win = st.current.win[slot];
-                const reached = win ? win.startMs + win.durationSec * 1000 : 0;
+                const reached = win ? win.startMs + els()[slot].duration * 1000 : 0;
+                // ended early at a gap: carry on from the next recorded instant
+                const resume = nextRecorded(currentSpans(latest.current.spans), reached + 500);
+                if (resume !== null && Date.now() - resume > OPEN_SPAN_MS) {
+                    latest.current.onState?.("gap");
+                    seek(resume);
+                    return;
+                }
                 latest.current.onState?.(Date.now() - reached < OPEN_SPAN_MS ? "liveEdge" : "end");
             }
         };

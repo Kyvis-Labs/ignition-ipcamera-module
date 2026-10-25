@@ -1,0 +1,15 @@
+{
+  "type": "object",
+  "properties": {
+    "kind": {
+      "type": "string",
+      "description": "event or bookmark"
+    },
+    "time": {
+      "type": "number"
+    },
+    "label": {
+      "type": "string"
+    }
+  }
+}

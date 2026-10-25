@@ -19,6 +19,8 @@ export interface ControlsProps {
     onPlayPause: () => void;
     onRate: (r: number) => void;
     onZoom: (ms: number) => void;
+    /** Present when the user may bookmark; omitted hides the button. */
+    onBookmark?: () => void;
 }
 
 const btn: React.CSSProperties = {
@@ -39,6 +41,9 @@ export function Controls(props: ControlsProps) {
                         {RATES.map(r => <option key={r} value={r}>{r}×</option>)}
                     </select>
                 </>
+            )}
+            {props.onBookmark && (
+                <button style={btn} onClick={props.onBookmark} title="Bookmark this moment">★</button>
             )}
             <span style={{ flex: 1 }} />
             <select style={btn} value={zoomMs} onChange={e => props.onZoom(Number(e.target.value))} title="Timeline range">

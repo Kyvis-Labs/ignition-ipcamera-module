@@ -49,6 +49,15 @@ class PathConfigsTest {
     }
 
     @Test
+    void shortBuffersGetShortSegments() {
+        CameraConfig c = new CameraConfig(CameraType.RTSP, "rtsp://h/x", "", "", null, "tcp", "", RecordMode.TAG,
+            7, 10, 5, 5, 30, List.of(), List.of(), List.of(), List.of(), List.of());
+        JsonObject main = PathConfigs.desired("x", c, null, SERVER, false).get("cam/x");
+        assertEquals("5m", main.get("recordDeleteAfter").getAsString());
+        assertEquals("2m", main.get("recordSegmentDuration").getAsString());
+    }
+
+    @Test
     void tagModeWithoutPreRollFollowsEventState() {
         assertFalse(PathConfigs.desired("x", cam(RecordMode.TAG, 0, ""), null, SERVER, false).get("cam/x").get("record").getAsBoolean());
         JsonObject on = PathConfigs.desired("x", cam(RecordMode.TAG, 0, ""), null, SERVER, true).get("cam/x");

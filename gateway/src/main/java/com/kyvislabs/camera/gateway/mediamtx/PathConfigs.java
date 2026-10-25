@@ -12,6 +12,7 @@ import com.inductiveautomation.ignition.common.gson.JsonElement;
 import com.inductiveautomation.ignition.common.gson.JsonObject;
 import com.kyvislabs.camera.gateway.config.CameraConfig;
 import com.kyvislabs.camera.gateway.config.MediaServerConfig;
+import com.kyvislabs.camera.gateway.config.RecordMode;
 
 /**
  * Translates a camera into the MediaMTX path configs that should exist for it. Pure, so the
@@ -80,7 +81,13 @@ public final class PathConfigs {
         if (deleteAfter != null) {
             main.addProperty("recordDeleteAfter", deleteAfter);
         }
-        main.addProperty("recordSegmentDuration", server.segmentMinutes() + "m");
+        int segment = server.segmentMinutes();
+        if (record && c.preRollSec() > 0 && (c.recordMode() == RecordMode.EVENT || c.recordMode() == RecordMode.TAG)) {
+            // MediaMTX refuses recordDeleteAfter < recordSegmentDuration, and deletes whole
+            // segments, so a short buffer needs short segments to actually stay short.
+            segment = Math.max(1, Math.min(segment, c.bufferRetentionMin() / 2));
+        }
+        main.addProperty("recordSegmentDuration", segment + "m");
         out.put(mainPath(camera), main);
 
         if (c.hasSubstream()) {

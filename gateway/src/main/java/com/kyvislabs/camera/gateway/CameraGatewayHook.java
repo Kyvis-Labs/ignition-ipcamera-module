@@ -1,8 +1,10 @@
 package com.kyvislabs.camera.gateway;
 
+import java.nio.file.Path;
 import java.util.Optional;
 
 import com.inductiveautomation.ignition.common.licensing.LicenseState;
+import com.inductiveautomation.ignition.common.script.ScriptManager;
 import com.inductiveautomation.ignition.common.util.LoggerEx;
 import com.inductiveautomation.ignition.gateway.config.NamedResourceHandler;
 import com.inductiveautomation.ignition.gateway.config.SingletonResourceHandler;
@@ -17,19 +19,24 @@ import com.kyvislabs.camera.common.CameraViewComponent;
 import com.kyvislabs.camera.gateway.auth.AuthRoute;
 import com.kyvislabs.camera.gateway.auth.TokenService;
 import com.kyvislabs.camera.gateway.config.CameraConfig;
-import com.kyvislabs.camera.gateway.perspective.CameraComponentDelegate;
 import com.kyvislabs.camera.gateway.config.MediaServerConfig;
+import com.kyvislabs.camera.gateway.events.ClipRoute;
+import com.kyvislabs.camera.gateway.events.EventService;
+import com.kyvislabs.camera.gateway.mediamtx.MediaMtxClient;
+import com.kyvislabs.camera.gateway.perspective.CameraComponentDelegate;
 
 public class CameraGatewayHook extends AbstractGatewayModuleHook {
     private static final LoggerEx log = LoggerEx.newBuilder().build("camera.GatewayHook");
 
     private GatewayContext context;
     private ComponentRegistry componentRegistry;
+    private ComponentModelDelegateRegistry delegateRegistry;
 
     private StatusTags statusTags;
-    private CameraManager manager;
     private TokenService tokens;
-    private ComponentModelDelegateRegistry delegateRegistry;
+    private CameraManager manager;
+    private EventService events;
+    private CameraServices services;
     private SingletonResourceHandler<MediaServerConfig> serverHandler;
     private NamedResourceHandler<CameraConfig> cameraHandler;
 
@@ -59,17 +66,54 @@ public class CameraGatewayHook extends AbstractGatewayModuleHook {
     @Override
     public void startup(LicenseState activationState) {
         serverHandler.startup();
-        manager.setServer(serverHandler.getResource());
+        MediaServerConfig server = serverHandler.getResource();
+        manager.setServer(server);
+
+        // The storage folder is read once: moving it at runtime would strand open events.
+        events = new EventService(context, storageRoot(server), new EventService.Hooks() {
+            @Override
+            public MediaMtxClient client() {
+                return manager.client();
+            }
+
+            @Override
+            public void recordNow(String camera, boolean on) {
+                manager.setRecordingNow(camera, on);
+            }
+
+            @Override
+            public void recordingChanged(String camera, boolean recording, Long eventStartMs) {
+                statusTags.setRecording(camera, recording);
+                if (eventStartMs != null) {
+                    statusTags.lastEventStart(camera, eventStartMs);
+                }
+            }
+        });
+        manager.setEvents(events);
+        services = new CameraServices(manager, tokens, events);
+
         cameraHandler.startup();
         manager.startup();
 
         PerspectiveContext perspective = PerspectiveContext.get(context);
         componentRegistry = perspective.getComponentRegistry();
         componentRegistry.registerComponent(CameraViewComponent.DESCRIPTOR);
-        CameraServices services = new CameraServices(manager, tokens);
         delegateRegistry = perspective.getComponentModelDelegateRegistry();
         delegateRegistry.register(CameraViewComponent.COMPONENT_ID, c -> new CameraComponentDelegate(c, services));
-        log.info("Camera module started");
+        log.infof("Camera module started (event storage %s)", events.store().root());
+    }
+
+    private Path storageRoot(MediaServerConfig server) {
+        return server.storagePath().isEmpty()
+            ? context.getSystemManager().getDataDir().toPath().resolve("camera").toAbsolutePath()
+            : Path.of(server.storagePath()).toAbsolutePath();
+    }
+
+    @Override
+    public void initializeScriptManager(ScriptManager manager) {
+        super.initializeScriptManager(manager);
+        // services exist only after startup(); resolve lazily so the module object can be added now
+        manager.addScriptModule("system.camera", new CameraScriptModule(() -> services));
     }
 
     @Override
@@ -83,6 +127,9 @@ public class CameraGatewayHook extends AbstractGatewayModuleHook {
         if (manager != null) {
             manager.shutdown();
         }
+        if (events != null) {
+            events.shutdown();
+        }
         if (cameraHandler != null) {
             cameraHandler.shutdown();
         }
@@ -94,7 +141,8 @@ public class CameraGatewayHook extends AbstractGatewayModuleHook {
     @Override
     public void mountRouteHandlers(RouteGroup routes) {
         AuthRoute.mount(routes, tokens, manager::callbackKey);
-        AdminRoutes.mount(routes, new CameraServices(manager, tokens));
+        AdminRoutes.mount(routes, () -> services);
+        ClipRoute.mount(routes, () -> events.store(), tokens);
     }
 
     @Override

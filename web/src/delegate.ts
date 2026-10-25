@@ -57,9 +57,26 @@ export async function liveUrl(delegate: CameraDelegate, camera: string, quality:
     return s.whep;
 }
 
+export interface MarkerData {
+    id: string;
+    kind: "event" | "bookmark";
+    t: number;
+    end?: number;
+    label: string;
+    source: string;
+}
+
 export interface TimelineResult {
     spans: Array<[number, number]>;
+    markers?: MarkerData[];
     error?: string;
+}
+
+/** A playable window: may start before the requested time (an exported clip starts at its event). */
+export interface PlaybackWindow {
+    url: string;
+    startMs: number;
+    durationSec: number;
 }
 
 export async function timelines(delegate: CameraDelegate, cameras: string[], start: number, end: number): Promise<Record<string, TimelineResult>> {
@@ -67,13 +84,18 @@ export async function timelines(delegate: CameraDelegate, cameras: string[], sta
     return res.timelines;
 }
 
-export async function playbackUrl(delegate: CameraDelegate, camera: string, start: number, durationSec: number): Promise<string> {
+export async function playbackWindow(delegate: CameraDelegate, camera: string, start: number, durationSec: number): Promise<PlaybackWindow> {
     const res = await delegate.request("playback", { cameras: [camera], start: Math.floor(start), duration: durationSec });
     const s = res.streams?.[camera];
     if (!s || s.error) {
         throw new Error(s?.error ?? "no recording");
     }
-    return s.url;
+    return { url: s.url, startMs: s.start ?? start, durationSec: s.duration ?? durationSec };
+}
+
+export async function addBookmark(delegate: CameraDelegate, camera: string, time: number | null, label: string): Promise<MarkerData> {
+    const res = await delegate.request("bookmark", { camera, time, label });
+    return res.bookmark;
 }
 
 /** Perspective date props arrive as epoch ms, ISO strings or Date; normalise to ms. */

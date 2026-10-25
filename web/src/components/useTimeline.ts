@@ -8,7 +8,7 @@ const REFRESH_MS = 30000;
  * so a live-following timeline keeps growing. Fetches a margin either side so small pans do
  * not refetch.
  */
-export function useTimelines(delegate: CameraDelegate | undefined, cameras: string[], viewEnd: number, zoomMs: number) {
+export function useTimelines(delegate: CameraDelegate | undefined, cameras: string[], viewEnd: number, zoomMs: number, refreshNonce = 0) {
     const [data, setData] = React.useState<Record<string, TimelineResult>>({});
     const key = cameras.join("\u0000");
     // quantise so panning by a few pixels does not trigger a fetch
@@ -34,7 +34,7 @@ export function useTimelines(delegate: CameraDelegate | undefined, cameras: stri
             cancelled = true;
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [delegate, key, bucket, zoomMs, tick]);
+    }, [delegate, key, bucket, zoomMs, tick, refreshNonce]);
 
     return data;
 }

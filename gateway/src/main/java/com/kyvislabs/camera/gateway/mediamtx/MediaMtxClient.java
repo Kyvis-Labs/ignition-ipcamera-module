@@ -99,6 +99,29 @@ public class MediaMtxClient {
         return spans;
     }
 
+    /**
+     * Streams [start, start + durationSec] as one MP4 into {@code target} (via a temp file, so a
+     * failed copy never leaves a truncated clip behind).
+     */
+    public void download(String path, Instant start, double durationSec, java.nio.file.Path target) throws IOException {
+        String url = playbackUrl + "/get?path=" + enc(path) + "&start=" + enc(start.toString())
+            + "&duration=" + durationSec + "&format=mp4&token=" + enc(playbackToken.get());
+        java.nio.file.Path tmp = target.resolveSibling(target.getFileName() + ".part");
+        HttpRequest req = HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofMinutes(10)).GET().build();
+        try {
+            HttpResponse<java.nio.file.Path> r = http.send(req, HttpResponse.BodyHandlers.ofFile(tmp));
+            if (r.statusCode() / 100 != 2) {
+                java.nio.file.Files.deleteIfExists(tmp);
+                throw new IOException("GET /get -> " + r.statusCode());
+            }
+            java.nio.file.Files.move(tmp, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            java.nio.file.Files.deleteIfExists(tmp);
+            throw new IOException("interrupted", e);
+        }
+    }
+
     public record Span(Instant start, double durationSec) {
         public Instant end() {
             return start.plusNanos((long) (durationSec * 1e9));
