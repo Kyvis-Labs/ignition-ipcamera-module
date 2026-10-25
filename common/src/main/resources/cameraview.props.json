@@ -1,0 +1,10 @@
+{
+  "type": "object",
+  "properties": {
+    "camera": {
+      "type": "string",
+      "description": "Name of a camera configured on the gateway.",
+      "default": ""
+    }
+  }
+}

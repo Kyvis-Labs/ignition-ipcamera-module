@@ -1,0 +1,14 @@
+[versions]
+# The OLDEST gateway this must load on: requiredIgnitionVersion is a floor, so
+# building against a newer SDK would stop the module loading on 8.3.9.
+ignition = "8.3.9"
+
+[libraries]
+ignition-common = { module = "com.inductiveautomation.ignitionsdk:ignition-common", version.ref = "ignition" }
+ignition-gateway-api = { module = "com.inductiveautomation.ignitionsdk:gateway-api", version.ref = "ignition" }
+ignition-designer-api = { module = "com.inductiveautomation.ignitionsdk:designer-api", version.ref = "ignition" }
+ignition-perspective-common = { module = "com.inductiveautomation.ignitionsdk:perspective-common", version.ref = "ignition" }
+ignition-perspective-gateway = { module = "com.inductiveautomation.ignitionsdk:perspective-gateway", version.ref = "ignition" }
+ignition-perspective-designer = { module = "com.inductiveautomation.ignitionsdk:perspective-designer", version.ref = "ignition" }
+junit-jupiter = { module = "org.junit.jupiter:junit-jupiter", version = "5.11.4" }
+junit-launcher = { module = "org.junit.platform:junit-platform-launcher", version = "1.11.4" }
