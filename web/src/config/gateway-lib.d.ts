@@ -36,6 +36,9 @@ declare module "@inductiveautomation/ignition-gateway-lib" {
         blankStateConfig?: { label: string; content: string; primaryLabel?: string };
         showMore?: ShowMoreItem[] | ((row: any) => ShowMoreItem[]);
         transformData?(items: any[]): any[];
+        /** Steps of the create wizard (default: one step showing CreateForm). Called on every render. */
+        createSteps?(wizardOpen: boolean): Array<{ id: string; title: string; validationRequired?: boolean; content: ReactNode }>;
+        onClose?(kind: "create" | "edit"): void;
         pollingInterval?: number;
         rowSelect?: boolean;
         duplicate?: boolean;

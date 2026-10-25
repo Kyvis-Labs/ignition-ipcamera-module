@@ -21,7 +21,7 @@ Getting Started
 4. Log into the Ignition Gateway
 5. Click on `Connections > Cameras > Media Server` and enter the media server settings
 6. Click on the `Cameras` tab and click `Create Camera`
-7. Enter the camera, or click `Discover ONVIF Cameras` to find one
+7. Enter the camera manually or click `Discover Cameras` to find ONVIF cameras
 8. Add a Camera View or Camera Wall component to a Perspective view and select your camera
 
 # Architecture

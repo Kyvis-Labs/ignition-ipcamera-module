@@ -87,26 +87,27 @@ const BOOKMARK_COLUMNS = [
     { fieldName: "postSec", header: "AFTER (S)" },
 ];
 
-/**
- * Prefill for the next new camera, set by ONVIF discovery just before it opens the create
- * wizard. Module state rather than context: the wizard is rendered by the gateway's grid.
- */
-let pendingSeed: Record<string, unknown> | null = null;
+const NEW_CAMERA = { name: "", description: "", enabled: true, ...CAMERA_DEFAULTS };
 
-export function seedNextCamera(seed: { name: string; type: string; onvifUrl: string }) {
-    pendingSeed = { name: seed.name, config: { type: seed.type, onvifUrl: seed.onvifUrl } };
-}
-
-function merge(base: Record<string, any>, over: Record<string, any> | undefined): Record<string, any> {
+function merge(base: Record<string, any>, over: Record<string, any>): Record<string, any> {
     const out: Record<string, any> = { ...base };
-    for (const [k, v] of Object.entries(over ?? {})) {
-        out[k] = v && typeof v === "object" && !Array.isArray(v) && out[k] && typeof out[k] === "object"
-            ? merge(out[k], v) : v;
+    for (const [k, v] of Object.entries(over)) {
+        if (v === undefined) {
+            continue;
+        }
+        out[k] = v && typeof v === "object" && !Array.isArray(v) && out[k] && typeof out[k] === "object" ? merge(out[k], v) : v;
     }
     return out;
 }
 
-/** Create wizard step and edit drawer body for a camera, built from the gateway's form parts. */
+/**
+ * Create wizard step and edit drawer body for a camera, built from the gateway's form parts.
+ *
+ * On create, mounting resets the form to its defaults. The gateway's react-hook-form keeps
+ * dirty values across a reset only for mounted fields, and none are mounted yet, so what the
+ * Choose Camera step set (or this step held before Back) would be lost: the defaults are
+ * therefore the form's current values over the new-camera defaults.
+ */
 export function CameraForm(props: ResourceFormProps) {
     const context = useFormContext();
     const { actionType } = useEnhancedFormContext();
@@ -114,16 +115,10 @@ export function CameraForm(props: ResourceFormProps) {
     const { setCurrentSchema } = useSchemaValidationContext();
     const type = props.type ?? actionType;
 
-    const defaults = React.useMemo(() => {
-        if (type === "edit") {
-            return props.defaultValues ?? {};
-        }
-        const seed = pendingSeed;
-        pendingSeed = null;
-        return merge({ name: "", description: "", enabled: true, ...CAMERA_DEFAULTS }, seed ?? undefined);
-        // the seed is consumed once, when the wizard first renders this step
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [type, props.defaultValues]);
+    // Create: read once per mount, so later typing does not change the defaults and re-reset.
+    const [created] = React.useState(() => merge(NEW_CAMERA, context.getValues()));
+    const defaults = React.useMemo(() => (type === "edit" ? props.defaultValues ?? {} : created),
+        [type, props.defaultValues, created]);
 
     const { defaultFormValuesSet } = useMountExtensionPointForm({
         type, defaultValues: defaults, schema: SCHEMA, setSchema: setCurrentSchema, context, mode,

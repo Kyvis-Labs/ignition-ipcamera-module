@@ -1,11 +1,12 @@
 import * as React from "react";
+import { useFormContext } from "react-hook-form";
 import {
-    Alert, AlertStates, Button, ButtonColorClasses, ColumnDef, DataGridActionButtons, Drawer, DrawerTemplate,
-    DrawerTemplateSize, FormLabel, InfoTooltipCell, InlineTable, StatusBadge, TextInput, TooltipSize,
+    Alert, AlertStates, Button, ButtonColorClasses, CircularProgress, ColumnDef, FormLabel, InfoTooltipCell, RadioCard,
+    StatusBadge, TextInput, TooltipSize,
 } from "@inductiveautomation/ignition-web-ui";
 import { Content, ResourceModeDataGrid } from "@inductiveautomation/ignition-gateway-lib";
 import { api, CAMERA_TYPE, CameraStatus, DiscoveredDevice } from "./api";
-import { CameraForm, CAMERA_DEFAULTS, seedNextCamera } from "./CameraForm";
+import { CameraForm, CAMERA_DEFAULTS } from "./CameraForm";
 
 const TYPE_LABELS: Record<string, string> = { RTSP: "RTSP", ONVIF: "ONVIF", UNIFI_PROTECT: "UniFi Protect" };
 const MODE_LABELS: Record<string, string> = { OFF: "Off", CONTINUOUS: "Continuous", EVENT: "Camera events", TAG: "Tag conditions" };
@@ -14,7 +15,7 @@ interface Row {
     name: string;
     description?: string;
     enabled: boolean;
-    config: { type: string; recordMode: string; subUrl?: string };
+    config: { type: string; recordMode: string; subUrl?: string; mainUrl?: string; onvifUrl?: string };
     status?: CameraStatus;
 }
 
@@ -81,11 +82,22 @@ const COLUMNS: ColumnDef[] = [
     { header: "VIEWERS", fieldName: "readers", sortable: false, setCellValue: (r: Row) => String(r.status?.readers ?? 0) },
 ];
 
+/** What the Choose Camera step found; kept here so it survives Back/Next within one wizard. */
+interface Discovery {
+    busy: boolean;
+    cidr: string;
+    found: DiscoveredDevice[] | null;
+    error: string | null;
+    choice: string;
+}
+
+const NO_DISCOVERY: Discovery = { busy: false, cidr: "", found: null, error: null, choice: "manual" };
+
 /** Connections → Cameras → Cameras: the gateway's resource grid, plus live status and ONVIF discovery. */
 export function CamerasPage() {
     const [status, setStatus] = React.useState<Record<string, CameraStatus>>({});
-    const [discoverOpen, setDiscoverOpen] = React.useState(false);
-    const openCreate = React.useRef<(() => void) | null>(null);
+    const [discovery, setDiscovery] = React.useState<Discovery>(NO_DISCOVERY);
+    const cameras = React.useRef<Row[]>([]);
 
     React.useEffect(() => {
         let alive = true;
@@ -98,21 +110,20 @@ export function CamerasPage() {
         };
     }, []);
 
-    const transformData = React.useCallback((items: Row[]) => items.map(r => ({ ...r, status: status[r.name] })), [status]);
+    const transformData = React.useCallback((items: Row[]) => {
+        cameras.current = items;
+        return items.map(r => ({ ...r, status: status[r.name] }));
+    }, [status]);
 
-    const actionButtons = React.useCallback((create: DataGridActionButtons): DataGridActionButtons[] => {
-        // The grid owns the create wizard; keep its opener so discovery can start a prefilled create.
-        openCreate.current = () => (create as { onClick?: (...a: unknown[]) => void }).onClick?.();
-        return [
-            create,
-            {
-                inputType: "button",
-                colorClass: ButtonColorClasses.SECONDARY,
-                children: "Discover ONVIF Cameras",
-                onClick: () => setDiscoverOpen(true),
-            },
-        ];
-    }, []);
+    const createSteps = React.useCallback(() => [
+        {
+            id: "choose-camera",
+            title: "Choose Camera",
+            validationRequired: false,
+            content: <ChooseCameraStep discovery={discovery} setDiscovery={setDiscovery} cameras={cameras.current} />,
+        },
+        { id: "camera-settings", title: "Camera Settings", validationRequired: true, content: <CameraForm type="create" /> },
+    ], [discovery]);
 
     return (
         <Content>
@@ -121,79 +132,117 @@ export function CamerasPage() {
                 itemName="Camera"
                 columnDefs={COLUMNS}
                 CreateForm={CameraForm}
+                createSteps={createSteps}
+                onClose={kind => kind === "create" && setDiscovery(NO_DISCOVERY)}
                 formDefaults={CAMERA_DEFAULTS}
-                actionButtons={actionButtons}
                 transformData={transformData}
                 rename={false}
                 blankStateConfig={{
                     label: "No Cameras Configured",
-                    content: "Add a camera by its RTSP stream URLs, or discover ONVIF cameras on the network.",
+                    content: "Add an IP camera by its RTSP stream URLs, or pick one that answers ONVIF discovery.",
                     primaryLabel: "Create Camera",
                 }}
             />
-            <DiscoverDrawer open={discoverOpen} onClose={() => setDiscoverOpen(false)} onAdd={d => {
-                seedNextCamera({
-                    name: (d.name || d.address).replace(/[^A-Za-z0-9_.-]+/g, "-").replace(/^[^A-Za-z0-9]+/, "").toLowerCase().slice(0, 64),
-                    type: "ONVIF",
-                    onvifUrl: d.xaddrs[0] ?? "",
-                });
-                setDiscoverOpen(false);
-                openCreate.current?.();
-            }} />
         </Content>
     );
 }
 
-function DiscoverDrawer(props: { open: boolean; onClose: () => void; onAdd: (d: DiscoveredDevice) => void }) {
-    const [cidr, setCidr] = React.useState("");
-    const [busy, setBusy] = React.useState(false);
-    const [found, setFound] = React.useState<DiscoveredDevice[] | null>(null);
-    const [error, setError] = React.useState<string | null>(null);
+/** A stream path name from what the camera calls itself. */
+function suggestName(d: DiscoveredDevice): string {
+    const base = d.hardware || d.name || d.address;
+    return base.replace(/[^A-Za-z0-9_.-]+/g, "-").replace(/^[^A-Za-z0-9]+/, "").toLowerCase().slice(0, 64);
+}
 
-    const run = async () => {
-        setBusy(true);
-        setError(null);
-        setFound(null);
+function hostOf(url?: string): string | null {
+    try {
+        return url ? new URL(url.replace(/^rtsps?:/i, "http:")).hostname : null;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Step 1 of Create Camera: manual entry, or a camera that answered ONVIF discovery (run on
+ * request). Choosing a camera fills the name, type and device URL.
+ */
+function ChooseCameraStep(props: { discovery: Discovery; setDiscovery: React.Dispatch<React.SetStateAction<Discovery>>; cameras: Row[] }) {
+    const { discovery: d, setDiscovery } = props;
+    const { setValue } = useFormContext();
+
+    const search = React.useCallback(async (cidr: string) => {
+        setDiscovery(prev => ({ ...prev, busy: true, error: null }));
         try {
-            setFound(await api.discover(cidr.trim() || undefined));
+            const found = await api.discover(cidr.trim() || undefined);
+            setDiscovery(prev => ({ ...prev, busy: false, found }));
         } catch (e) {
-            setError((e as Error).message);
-        } finally {
-            setBusy(false);
+            setDiscovery(prev => ({ ...prev, busy: false, found: prev.found ?? [], error: (e as Error).message }));
         }
+    }, [setDiscovery]);
+
+    // Hosts already configured, so a discovered camera that is already added says so.
+    const existing = React.useMemo(() => {
+        const m = new Map<string, string>();
+        for (const c of props.cameras) {
+            for (const h of [hostOf(c.config.onvifUrl), hostOf(c.config.mainUrl)]) {
+                if (h) {
+                    m.set(h, c.name);
+                }
+            }
+        }
+        return m;
+    }, [props.cameras]);
+
+    const found = d.found ?? [];
+    const radios = [
+        {
+            value: "manual",
+            label: "Enter Manually",
+            description: "Any camera with an RTSP stream, an ONVIF camera that did not answer, or a UniFi Protect RTSPS share.",
+        },
+        ...found.map(dev => {
+            const added = existing.get(dev.address);
+            return {
+                value: dev.xaddrs[0] ?? dev.address,
+                label: dev.hardware || dev.name || dev.address,
+                description: `${dev.address}${dev.name && dev.hardware ? ` · ${dev.name}` : ""}${added ? ` · already added as ${added}` : ""}`,
+            };
+        }),
+    ];
+
+    const choose = (value: string) => {
+        setDiscovery(prev => ({ ...prev, choice: value }));
+        const dev = found.find(x => (x.xaddrs[0] ?? x.address) === value);
+        const opts = { shouldDirty: true };
+        setValue("name", dev ? suggestName(dev) : "", opts);
+        setValue("config.type", dev ? "ONVIF" : CAMERA_DEFAULTS.config.type, opts);
+        setValue("config.onvifUrl", dev?.xaddrs[0] ?? "", opts);
     };
 
     return (
-        <Drawer open={props.open} anchor="right" onClose={props.onClose} size={DrawerTemplateSize.LARGE}>
-            <DrawerTemplate path={["Discover ONVIF Cameras"]} title="Discover ONVIF Cameras" hideButtonBar onClose={props.onClose}>
-                <div style={{ display: "flex", flexDirection: "column", gap: "1rem", padding: "1rem" }}>
-                    <Alert id="discover-info" embedded isDismissible={false} state={AlertStates.INFO}
-                        description="A multicast probe only reaches the gateway's own network. When the gateway runs in a container, enter the cameras' subnet to sweep it instead." />
-                    <FormLabel id="discover-cidr" label="Subnet (optional)" description="For example 192.0.2.0/24. Blank sends a multicast probe.">
-                        <TextInput id="discover-cidr" value={cidr} placeholder="192.0.2.0/24" onChange={e => setCidr(e.target.value)} />
-                    </FormLabel>
-                    <div>
-                        <Button colorClass={ButtonColorClasses.PRIMARY} disabled={busy} onClick={run}>{busy ? "Searching…" : "Discover"}</Button>
-                    </div>
-                    {error && <Alert id="discover-error" embedded isDismissible={false} state={AlertStates.ERROR} description={error} />}
-                    {found && (
-                        <InlineTable
-                            id="discovered-cameras"
-                            data={found}
-                            emptyText="No ONVIF devices answered."
-                            columnDef={[
-                                { fieldName: "name", header: "DEVICE", cell: (_v, i) => found[i].name || found[i].address },
-                                { fieldName: "hardware", header: "HARDWARE" },
-                                { fieldName: "xaddrs", header: "DEVICE SERVICE", cell: (_v, i) => found[i].xaddrs[0] ?? "" },
-                                {
-                                    fieldName: "add", header: "", width: "8rem",
-                                    cell: (_v, i) => <Button colorClass={ButtonColorClasses.SECONDARY} onClick={() => props.onAdd(found[i])}>Add…</Button>,
-                                },
-                            ]}
-                        />
-                    )}
+        <>
+            <p>Enter a camera manually, or discover ONVIF cameras and choose one. On the next step, use the camera's
+                credentials to fill in its stream URLs.</p>
+            <FormLabel id="discover-cidr" label="Subnet"
+                description="Optional. Blank sends a multicast probe, which only reaches the gateway's own network. A subnet such as 192.0.2.0/24 probes every address in it directly.">
+                <div style={{ display: "flex", gap: "0.5rem" }}>
+                    <TextInput id="discover-cidr" value={d.cidr} placeholder="192.0.2.0/24"
+                        onChange={e => setDiscovery(prev => ({ ...prev, cidr: e.target.value }))} />
+                    <Button colorClass={ButtonColorClasses.SECONDARY} disabled={d.busy} onClick={() => search(d.cidr)}>
+                        Discover Cameras
+                    </Button>
                 </div>
-            </DrawerTemplate>
-        </Drawer>
+            </FormLabel>
+            {d.busy && (
+                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    <CircularProgress size="1rem" /> Searching the network…
+                </div>
+            )}
+            {!d.busy && d.found !== null && found.length === 0 && !d.error && (
+                <Alert id="discover-none" embedded isDismissible={false} state={AlertStates.INFO}
+                    description="No ONVIF cameras answered. Try the cameras' subnet, or enter the camera manually." />
+            )}
+            {d.error && <Alert id="discover-error" embedded isDismissible={false} state={AlertStates.ERROR} description={`Discovery failed: ${d.error}`} />}
+            <RadioCard id="choose-camera" value={d.choice} onChange={(_e, v) => choose(v)} radios={radios} />
+        </>
     );
 }
