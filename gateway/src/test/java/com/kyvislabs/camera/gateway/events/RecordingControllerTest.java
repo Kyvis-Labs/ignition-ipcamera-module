@@ -136,4 +136,48 @@ class RecordingControllerTest {
         assertTrue(c.recording());
         assertEquals(RecordingController.MAX_EVENT_MS + 5, c.openEvent().startMs());
     }
+
+    @Test
+    void releaseIsHonouredAfterModeChange() throws Exception {
+        RecordingController c = controller(cfg(RecordMode.TAG, 0, 0), Clock.systemUTC());
+        c.trigger("event:a", true, "a", "event");
+        c.reconfigure(cfg(RecordMode.TAG, 0, 0));
+        c.trigger("event:a", false, null, "event");
+        TimeUnit.MILLISECONDS.sleep(300);
+        assertFalse(c.recording());
+    }
+
+    @Test
+    void strandedKeysArePruned() throws Exception {
+        RecordingController c = controller(cfg(RecordMode.TAG, 0, 0), Clock.systemUTC());
+        c.trigger("tag:old|true", true, "a", "tag");
+        c.trigger("script:manual", true, "s", "script");
+        c.retainKeys(k -> !k.startsWith("tag:"));
+        TimeUnit.MILLISECONDS.sleep(300);
+        assertTrue(c.recording(), "the manual trigger still holds it");
+        c.retainKeys(k -> false);
+        TimeUnit.MILLISECONDS.sleep(300);
+        assertFalse(c.recording());
+    }
+
+    @Test
+    void staleCloseTimerDoesNotCutARetriggeredEvent() throws Exception {
+        RecordingController c = controller(cfg(RecordMode.TAG, 0, 1), Clock.systemUTC());
+        c.trigger("a", true, "a", "tag");
+        c.trigger("a", false, null, "tag");     // timer 1 due at +1 s
+        TimeUnit.MILLISECONDS.sleep(900);
+        c.trigger("a", true, "a", "tag");
+        c.trigger("a", false, null, "tag");     // timer 2 due at +1.9 s
+        TimeUnit.MILLISECONDS.sleep(500);       // timer 1 has fired by now
+        assertTrue(c.recording(), "timer 1 must not close it");
+        TimeUnit.MILLISECONDS.sleep(800);
+        assertFalse(c.recording());
+    }
+
+    @Test
+    void bufferedEventsSplitAtHalfTheBuffer() {
+        RecordingController c = controller(cfg(RecordMode.TAG, 10, 5), Clock.systemUTC());
+        assertEquals(30 * 60_000L, c.maxEventMs(), "60 min buffer -> split every 30 min");
+        assertEquals(RecordingController.MAX_EVENT_MS, controller(cfg(RecordMode.TAG, 0, 5), Clock.systemUTC()).maxEventMs());
+    }
 }

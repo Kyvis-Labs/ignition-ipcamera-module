@@ -76,7 +76,7 @@ class OnvifParsingTest {
     void subscriberTracksDetectorsAndReleasesOnLoss() throws Exception {
         List<String> calls = new java.util.ArrayList<>();
         OnvifEventSubscriber s = new OnvifEventSubscriber("cam", null, List.of("motion"),
-            (cam, label, on) -> calls.add(label + "=" + on), (cam, ok, err) -> { });
+            (cam, key, label, on) -> calls.add(label + "=" + on), (cam, ok, err) -> { });
         List<OnvifEvent> ev = OnvifEvent.parse(Soap.parse(PULL));
         s.handle(ev.get(0));
         s.handle(ev.get(0));

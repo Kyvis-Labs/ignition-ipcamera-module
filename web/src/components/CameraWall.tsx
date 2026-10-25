@@ -102,6 +102,8 @@ interface TileProps {
     objectFit: CameraWallProps["objectFit"];
     showStatus: boolean;
     spans: Spans;
+    spansFrom?: number;
+    spansTo?: number;
     seek: { to: number; nonce: number };
     playing: boolean;
     rate: number;
@@ -137,7 +139,8 @@ function Tile(props: TileProps) {
                 <LivePlayer resolveUrl={resolveUrl} streamKey={`${tile.camera}|${quality}`} paused={paused}
                     objectFit={props.objectFit} onState={(s, d) => setState({ s, detail: d })} />
             ) : (
-                <PlaybackPlayer windowUrl={windowUrl} spans={props.spans} seekTo={props.seek.to} seekNonce={props.seek.nonce}
+                <PlaybackPlayer windowUrl={windowUrl} spans={props.spans} spansFrom={props.spansFrom} spansTo={props.spansTo}
+                    seekTo={props.seek.to} seekNonce={props.seek.nonce}
                     playing={props.playing} rate={props.rate} objectFit={props.objectFit} syncTime={props.master}
                     onTime={props.onTime}
                     onState={s => setState({ s: s === "playing" ? "live" : s === "error" ? "error" : "connecting", detail: s === "gap" || s === "end" ? "no recording here" : undefined })} />
@@ -180,6 +183,13 @@ export function CameraWall(props: ComponentProps<CameraWallProps>) {
     const shown = maxed ? tiles.filter(t => t.camera === maxed) : tiles.slice(page * pageSize, page * pageSize + pageSize);
     const live = p.mode !== "playback";
 
+    // timeline view state (declared before the clock, which keeps the playhead in view)
+    const [zoomMs, setZoomMs] = React.useState(ZOOMS[0].ms);
+    const [viewEnd, setViewEnd] = React.useState(Date.now());
+    const [follow, setFollow] = React.useState(true);
+    const zoomRef = React.useRef(zoomMs);
+    zoomRef.current = zoomMs;
+
     // ---- shared playback clock ----
     // One clock in a ref, re-based on every seek / play / pause / rate change, so that no
     // effect can reset it from a stale render value.
@@ -217,17 +227,27 @@ export function CameraWall(props: ComponentProps<CameraWallProps>) {
             if (clock.current.playing && t > Date.now() - 3000) {
                 props.store.props.write("mode", "live");
             }
+            // keep the playhead inside the fetched timeline range
+            setViewEnd(v => (t > v - zoomRef.current * 0.05 || t < v - zoomRef.current ? Math.min(Date.now(), t + zoomRef.current * 0.5) : v));
         }, 250);
         return () => clearInterval(id);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [live]);
 
+    // Echoes of our own writes land near the clock; only a real jump counts as a seek.
     const propTime = toMs(p.playbackTime);
-    if (!live && propTime !== null && propTime !== lastWritten.current && propTime !== seek.to) {
+    if (!live && propTime !== null && propTime !== lastWritten.current && propTime !== seek.to
+        && Math.abs(propTime - master) > 2000) {
         setSeek({ to: propTime, nonce: seek.nonce + 1 });
+        setFollow(false);
+        setViewEnd(Math.min(Date.now(), propTime + zoomMs / 2));
     }
 
     const goPlayback = (t: number) => {
+        if (t < viewEnd - zoomMs || t > viewEnd) {
+            setFollow(false);
+            setViewEnd(Math.min(Date.now(), t + zoomMs / 2));
+        }
         lastWritten.current = Math.round(t);
         props.store.props.write("playbackTime", lastWritten.current);
         props.store.props.write("mode", "playback");
@@ -236,9 +256,6 @@ export function CameraWall(props: ComponentProps<CameraWallProps>) {
     };
 
     // ---- timeline (union of shown cameras) ----
-    const [zoomMs, setZoomMs] = React.useState(ZOOMS[0].ms);
-    const [viewEnd, setViewEnd] = React.useState(Date.now());
-    const [follow, setFollow] = React.useState(true);
     React.useEffect(() => {
         if (!follow) {
             return;
@@ -247,7 +264,8 @@ export function CameraWall(props: ComponentProps<CameraWallProps>) {
         return () => clearInterval(id);
     }, [follow]);
     const shownNames = shown.map(t => t.camera);
-    const timelines = useTimelines(p.showTimeline || !live ? delegate : undefined, shownNames, viewEnd, zoomMs);
+    const tl = useTimelines(p.showTimeline || !live ? delegate : undefined, shownNames, viewEnd, zoomMs);
+    const timelines = tl.data;
     const union = React.useMemo(() => unionSpans(shownNames.map(c => timelines[c]?.spans ?? [])),
         // eslint-disable-next-line react-hooks/exhaustive-deps
         [timelines, shownNames.join("|")]);
@@ -273,7 +291,7 @@ export function CameraWall(props: ComponentProps<CameraWallProps>) {
                         <Tile key={tile.camera} tile={tile} live={live} maximised={maxed === tile.camera}
                             allowedLive={allowed} pageVisible={pageVisible} batcher={batcher} delegate={delegate}
                             objectFit={p.objectFit} showStatus={p.showStatus}
-                            spans={timelines[tile.camera]?.spans ?? []} seek={seek} playing={playing} rate={rate} master={master}
+                            spans={timelines[tile.camera]?.spans ?? []} spansFrom={tl.from} spansTo={tl.to} seek={seek} playing={playing} rate={rate} master={master}
                             onToggleMax={() => setMaxed(m => (m === tile.camera ? null : tile.camera))} />
                     );
                 })}

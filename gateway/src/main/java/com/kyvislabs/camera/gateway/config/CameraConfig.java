@@ -90,8 +90,11 @@ public record CameraConfig(
 ) {
     public static final ResourceType TYPE = new ResourceType(CameraModule.MODULE_ID, "camera");
 
-    /** Also the MediaMTX path grammar, minus '/', which the module reserves for cam/name/sub. */
-    public static final Pattern NAME = Pattern.compile("[A-Za-z0-9_.-]{1,64}");
+    /**
+     * Also the MediaMTX path grammar, minus '/', which the module reserves for cam/name/sub. It
+     * must start with a letter or digit: the name is also a folder name, so "." and ".." are out.
+     */
+    public static final Pattern NAME = Pattern.compile("[A-Za-z0-9][A-Za-z0-9_.-]{0,63}");
 
     public static final CameraConfig DEFAULT = new CameraConfig(
         CameraType.RTSP, "", "", "", null, "", "tcp", "", RecordMode.CONTINUOUS,
@@ -134,6 +137,8 @@ public record CameraConfig(
         .buildRouteDelegate(r -> r.configSchema(CameraConfig.class).openApiTagName("Cameras"))
         .buildValidator((c, v) -> {
             v.requireNotEmpty("mainUrl", c.mainUrl());
+            v.checkField(c.onvifUrl() == null || c.onvifUrl().isBlank() || c.onvifUrl().matches("(?i)https?://.+"),
+                "onvifUrl", "onvifUrl must be an http:// or https:// URL");
             v.checkField(c.mainUrl() == null || c.mainUrl().matches("(?i)rtsps?://.+"),
                 "mainUrl", "mainUrl must be an rtsp:// or rtsps:// URL");
             v.checkField(!c.hasSubstream() || c.subUrl().matches("(?i)rtsps?://.+"),

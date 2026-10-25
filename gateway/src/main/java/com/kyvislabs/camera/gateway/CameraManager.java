@@ -158,11 +158,11 @@ public class CameraManager {
     }
 
     private void reconcileSafely() {
-        tokens.purgeExpired();
-        if (events != null) {
-            events.tick();
-        }
         try {
+            tokens.purgeExpired();
+            if (events != null) {
+                events.tick();
+            }
             reconcile();
         } catch (Throwable t) {
             log.error("Reconcile pass failed", t);
@@ -221,8 +221,9 @@ public class CameraManager {
                 lastError.remove(path);
             } catch (Exception ex) {
                 failed.add(pathOwner.get(path));
-                if (!ex.getMessage().equals(lastError.put(path, ex.getMessage()))) {
-                    log.warnf("Could not apply path %s: %s", path, ex.getMessage());
+                String msg = String.valueOf(ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName());
+                if (!msg.equals(lastError.put(path, msg))) {
+                    log.warnf("Could not apply path %s: %s", path, msg);
                 }
             }
         }

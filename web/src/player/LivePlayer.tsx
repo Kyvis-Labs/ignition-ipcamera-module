@@ -88,11 +88,18 @@ export function LivePlayer(props: LivePlayerProps) {
                     if (video.currentTime !== lastTime) {
                         lastTime = video.currentTime;
                         lastChange = Date.now();
+                    } else if (video.paused) {
+                        lastChange = Date.now();
                     } else if (Date.now() - lastChange > STALL_MS && s.pc.connectionState !== "new") {
                         scheduleRetry("stream stalled");
                     }
                 }, 2000);
-                video.play().catch(() => undefined);
+                video.play().catch(() => {
+                    // autoplay with sound needs a user gesture; fall back to muted rather than
+                    // sitting paused (which the stall detector would read as a dead stream)
+                    video.muted = true;
+                    video.play().catch(() => undefined);
+                });
             } catch (e) {
                 if (!disposed) {
                     scheduleRetry((e as Error).message);

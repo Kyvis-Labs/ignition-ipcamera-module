@@ -158,6 +158,13 @@ public final class AdminRoutes {
                     CameraServices svc = ref.get();
                     CameraConfig cam = svc.manager().camera(o.get("camera").getAsString())
                         .orElseThrow(() -> new IllegalArgumentException("no camera named '" + o.get("camera").getAsString() + "'"));
+                    // only to the camera's own host: never send its credentials anywhere else
+                    String want = java.net.URI.create(cam.onvifDeviceUrl()).getHost();
+                    String got = java.net.URI.create(o.get("url").getAsString()).getHost();
+                    if (want == null || !want.equalsIgnoreCase(got)) {
+                        throw new IllegalArgumentException("stored credentials are only used for the camera's own host ("
+                            + want + "); type the password to probe another address");
+                    }
                     password = svc.manager().reveal(cam.password(), "camera password");
                     if (user.isEmpty()) {
                         user = cam.username();

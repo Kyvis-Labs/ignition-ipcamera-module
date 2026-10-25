@@ -24,7 +24,8 @@ public class OnvifEventSubscriber implements AutoCloseable {
     private static final Duration PULL_TIMEOUT = Duration.ofSeconds(10);
 
     public interface Sink {
-        void detector(String camera, String label, boolean on);
+        /** @param key stable per detector (topic + source items); label is for display */
+        void detector(String camera, String key, String label, boolean on);
     }
 
     public interface Status {
@@ -37,6 +38,7 @@ public class OnvifEventSubscriber implements AutoCloseable {
     private final Sink sink;
     private final Status status;
     private final Thread thread;
+    private final String instance = Long.toHexString(System.nanoTime());
     private volatile boolean running = true;
     private volatile String pullPoint;
     /** key -> label of detectors currently on */
@@ -65,6 +67,11 @@ public class OnvifEventSubscriber implements AutoCloseable {
                     throw new java.io.IOException("camera has no ONVIF events service");
                 }
                 pullPoint = client.createPullPoint(TERMINATION);
+                if (!running) {
+                    // closed while subscribing: close() may have missed this pull point
+                    client.unsubscribe(pullPoint);
+                    break;
+                }
                 status.health(camera, true, "");
                 log.infof("Camera '%s': ONVIF events subscribed", camera);
                 backoff = 2000;
@@ -98,19 +105,22 @@ public class OnvifEventSubscriber implements AutoCloseable {
         if (active == null || !e.matches(types)) {
             return;
         }
-        String key = e.key();
+        // prefixed per subscriber instance: a replacement subscriber's detectors never share a
+        // key with this one, so this one's late release cannot close the other's event
+        String key = instance + "|" + e.key();
         String label = shortTopic(e.topic());
         if (active) {
             if (on.put(key, label) == null) {
-                sink.detector(camera, label, true);
+                sink.detector(camera, key, label, true);
             }
         } else if (on.remove(key) != null) {
-            sink.detector(camera, label, false);
+            sink.detector(camera, key, label, false);
         }
     }
 
+    /** Reports every detector still on as off (keys are unique to this subscriber instance). */
     private void releaseAll() {
-        on.forEach((key, label) -> sink.detector(camera, label, false));
+        on.forEach((key, label) -> sink.detector(camera, key, label, false));
         on.clear();
     }
 

@@ -176,7 +176,9 @@ public class OnvifClient {
             if (challenge.regionMatches(true, 0, "Digest", 0, 6)) {
                 // fresh envelope: the WS-Security nonce must not be replayed
                 envelope = Soap.envelope(body, user, password, Instant.now().plus(clockOffset), headers);
-                r = post(url, envelope, httpDigest(challenge, "POST", URI.create(url).getRawPath()), timeout);
+                URI u = URI.create(url);
+                String uri = u.getRawPath() + (u.getRawQuery() == null ? "" : "?" + u.getRawQuery());
+                r = post(url, envelope, httpDigest(challenge, "POST", uri), timeout);
             }
         }
         Document d;
@@ -208,10 +210,12 @@ public class OnvifClient {
     }
 
     private static final Pattern PARAM = Pattern.compile("(\\w+)=(?:\"([^\"]*)\"|([^,\\s]*))");
+    private static final java.security.SecureRandom RANDOM = new java.security.SecureRandom();
+    private String lastNonce;
     private int nonceCount;
 
-    /** RFC 7616 Digest (MD5, qop=auth). */
-    String httpDigest(String challenge, String method, String uri) {
+    /** RFC 7616 Digest: MD5 or SHA-256 (and their -sess forms), qop=auth when offered. */
+    synchronized String httpDigest(String challenge, String method, String uri) {
         Map<String, String> p = new LinkedHashMap<>();
         Matcher m = PARAM.matcher(challenge.substring(6));
         while (m.find()) {
@@ -220,22 +224,47 @@ public class OnvifClient {
         String realm = p.getOrDefault("realm", "");
         String nonce = p.getOrDefault("nonce", "");
         String qop = p.get("qop");
-        String ha1 = md5(user + ":" + realm + ":" + (password == null ? "" : password));
-        String ha2 = md5(method + ":" + uri);
+        String algorithm = p.getOrDefault("algorithm", "MD5");
+        boolean sha256 = algorithm.toUpperCase().startsWith("SHA-256");
+        boolean sess = algorithm.toLowerCase().endsWith("-sess");
+        if (!nonce.equals(lastNonce)) {
+            lastNonce = nonce;
+            nonceCount = 0;
+        }
+        byte[] cn = new byte[8];
+        RANDOM.nextBytes(cn);
+        String cnonce = HexFormat.of().formatHex(cn);
+        String ha1 = hash(sha256, user + ":" + realm + ":" + (password == null ? "" : password));
+        if (sess) {
+            ha1 = hash(sha256, ha1 + ":" + nonce + ":" + cnonce);
+        }
+        String ha2 = hash(sha256, method + ":" + uri);
         StringBuilder h = new StringBuilder("Digest username=\"").append(user).append("\", realm=\"").append(realm)
-            .append("\", nonce=\"").append(nonce).append("\", uri=\"").append(uri).append("\"");
-        if (qop != null && qop.contains("auth")) {
+            .append("\", nonce=\"").append(nonce).append("\", uri=\"").append(uri).append("\", algorithm=").append(algorithm);
+        boolean auth = qop != null && java.util.Arrays.stream(qop.split(",")).map(String::trim).anyMatch("auth"::equals);
+        if (auth) {
             String nc = String.format("%08x", ++nonceCount);
-            String cnonce = HexFormat.of().formatHex(Instant.now().toString().getBytes(StandardCharsets.UTF_8)).substring(0, 16);
             h.append(", qop=auth, nc=").append(nc).append(", cnonce=\"").append(cnonce).append("\", response=\"")
-                .append(md5(ha1 + ":" + nonce + ":" + nc + ":" + cnonce + ":auth:" + ha2)).append("\"");
+                .append(hash(sha256, ha1 + ":" + nonce + ":" + nc + ":" + cnonce + ":auth:" + ha2)).append("\"");
         } else {
-            h.append(", response=\"").append(md5(ha1 + ":" + nonce + ":" + ha2)).append("\"");
+            h.append(", response=\"").append(hash(sha256, ha1 + ":" + nonce + ":" + ha2)).append("\"");
         }
         if (p.containsKey("opaque")) {
             h.append(", opaque=\"").append(p.get("opaque")).append("\"");
         }
         return h.toString();
+    }
+
+    private static String hash(boolean sha256, String s) {
+        return sha256 ? sha256(s) : md5(s);
+    }
+
+    private static String sha256(String s) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(s.getBytes(StandardCharsets.UTF_8)));
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     private static String md5(String s) {

@@ -10,6 +10,12 @@ export interface PlaybackPlayerProps {
      */
     windowUrl: (startMs: number, durationSec: number) => Promise<{ url: string; startMs: number; durationSec: number }>;
     spans: Spans;
+    /**
+     * The time range `spans` describes. A seek is applied only once the spans cover its target,
+     * so a jump to yesterday waits for yesterday's timeline instead of playing the wrong time.
+     */
+    spansFrom?: number;
+    spansTo?: number;
     /** Changing this (or seekNonce) jumps playback to that time. */
     seekTo: number;
     seekNonce: number;
@@ -105,7 +111,10 @@ export function PlaybackPlayer(props: PlaybackPlayerProps) {
     const st = React.useRef({
         active: 0 as 0 | 1,
         win: [null, null] as [Win | null, Win | null],
-        loadSeq: 0,
+        /** per-slot load generation: a slot ignores any load superseded by a later one */
+        seq: [0, 0] as [number, number],
+        /** a slot is between src requests and playable media */
+        loading: [false, false] as [boolean, boolean],
         lastTimeEmit: 0,
     });
     const latest = React.useRef(props);
@@ -114,55 +123,74 @@ export function PlaybackPlayer(props: PlaybackPlayerProps) {
     const els = () => [aRef.current!, bRef.current!] as const;
 
     const load = React.useCallback(async (slot: 0 | 1, win: Win, autoplay: boolean) => {
-        const seq = ++st.current.loadSeq;
+        const seq = ++st.current.seq[slot];
         const el = els()[slot];
         st.current.win[slot] = win;
+        st.current.loading[slot] = true;
         debug("load", { slot, seq, start: new Date(win.startMs).toISOString(), dur: win.durationSec, autoplay, active: st.current.active });
+        const current = () => seq === st.current.seq[slot];
         try {
             const res = await latest.current.windowUrl(win.startMs, win.durationSec);
-            if (seq !== st.current.loadSeq && slot === st.current.active) {
+            if (!current()) {
                 return;
             }
             const offsetSec = Math.max(0, (win.startMs - res.startMs) / 1000);
             st.current.win[slot] = { startMs: res.startMs, durationSec: res.durationSec };
+            const ready = new Promise<void>(resolve => el.addEventListener("loadedmetadata", () => resolve(), { once: true }));
             el.src = res.url;
             el.playbackRate = latest.current.rate;
+            await ready;
+            if (!current()) {
+                return;
+            }
             if (offsetSec > 0.05) {
-                await new Promise<void>(resolve => el.addEventListener("loadedmetadata", () => resolve(), { once: true }));
                 el.currentTime = offsetSec;
             }
+            st.current.loading[slot] = false;
             if (autoplay) {
                 await el.play().catch(() => undefined);
             }
         } catch (e) {
-            latest.current.onState?.("error", (e as Error).message);
+            if (current()) {
+                st.current.loading[slot] = false;
+                latest.current.onState?.("error", (e as Error).message);
+            }
         }
     }, []);
+
+    /** Abandons whatever the slot holds or is loading. */
+    const clearSlot = (slot: 0 | 1) => {
+        st.current.seq[slot]++;
+        st.current.win[slot] = null;
+        st.current.loading[slot] = false;
+    };
 
     const seek = React.useCallback((t: number) => {
         const win = windowFor(latest.current.spans, t);
         debug("seek", { t: new Date(t).toISOString(), win, active: st.current.active });
         const slot = st.current.active;
+        // any preload belongs to the old position
+        clearSlot(slot === 0 ? 1 : 0);
         if (!win) {
             latest.current.onState?.("end");
             return;
         }
         latest.current.onState?.(win.startMs > t + 1000 ? "gap" : "loading");
-        st.current.win[slot === 0 ? 1 : 0] = null;
         load(slot, win, latest.current.playing);
     }, [load]);
 
     // Hard seeks: each (seekTo, seekNonce) pair is applied exactly once, as soon as there are
     // spans to resolve it against. A refreshed timeline must not restart playback.
     const applied = React.useRef<string | null>(null);
-    const hasSpans = props.spans.length > 0;
+    const covered = props.spans.length > 0 && (props.spansFrom === undefined
+        || (props.seekTo >= props.spansFrom && props.seekTo <= (props.spansTo ?? Number.MAX_SAFE_INTEGER)));
     React.useEffect(() => {
         const key = `${props.seekNonce}|${props.seekTo}`;
-        if (hasSpans && applied.current !== key) {
+        if (covered && applied.current !== key) {
             applied.current = key;
             seek(props.seekTo);
         }
-    }, [props.seekTo, props.seekNonce, hasSpans, seek]);
+    }, [props.seekTo, props.seekNonce, covered, seek]);
 
     // A synced player that is idle (in a gap, or ended) rejoins once the master clock enters
     // recorded time. Checked at most every 2 s so a stream of clock ticks cannot thrash it.
@@ -196,7 +224,8 @@ export function PlaybackPlayer(props: PlaybackPlayerProps) {
     React.useEffect(() => {
         const [a, b] = els();
         const onTimeUpdate = (slot: 0 | 1) => () => {
-            if (slot !== st.current.active) {
+            // while a slot loads, its element still plays the old media: ignore it
+            if (slot !== st.current.active || st.current.loading[slot]) {
                 return;
             }
             const el = els()[slot];
@@ -233,21 +262,32 @@ export function PlaybackPlayer(props: PlaybackPlayerProps) {
         };
         const onEnded = (slot: 0 | 1) => () => {
             debug("ended", { slot, active: st.current.active, ct: els()[slot].currentTime, dur: els()[slot].duration, other: st.current.win[slot === 0 ? 1 : 0] });
-            if (slot !== st.current.active) {
+            if (slot !== st.current.active || st.current.loading[slot]) {
                 return;
             }
             const other: 0 | 1 = slot === 0 ? 1 : 0;
             if (st.current.win[other]) {
                 const done = st.current.win[slot]!;
                 const prevEnd = done.startMs + els()[slot].duration * 1000;
-                st.current.active = other;
-                setActive(other);
                 const next = els()[other];
-                next.playbackRate = latest.current.rate;
-                next.play().catch(() => undefined);
-                st.current.win[slot] = null;
-                if (st.current.win[other]!.startMs - prevEnd > 1000) {
-                    latest.current.onState?.("gap");
+                const swap = () => {
+                    if (st.current.active !== slot || !st.current.win[other]) {
+                        return; // a seek happened meanwhile
+                    }
+                    st.current.active = other;
+                    setActive(other);
+                    next.playbackRate = latest.current.rate;
+                    next.play().catch(() => undefined);
+                    clearSlot(slot);
+                    if (st.current.win[other]!.startMs - prevEnd > 1000) {
+                        latest.current.onState?.("gap");
+                    }
+                };
+                if (st.current.loading[other]) {
+                    // preload not playable yet: swap the moment it is
+                    next.addEventListener("loadeddata", swap, { once: true });
+                } else {
+                    swap();
                 }
             } else {
                 const win = st.current.win[slot];

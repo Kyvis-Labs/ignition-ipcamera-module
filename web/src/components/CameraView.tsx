@@ -76,13 +76,24 @@ export function CameraView(props: ComponentProps<CameraViewProps>) {
 
     // An externally written playbackTime is a seek. Adjusted during render (not in an effect)
     // so the player mounts with the right target instead of loading a stale window first.
+    // Echoes of our own writes (late, or rounded by a binding) land within a couple of seconds
+    // of where playback is; only a real jump counts as a seek.
     const propTime = toMs(p.playbackTime);
-    if (p.mode === "playback" && propTime !== null && propTime !== lastWritten.current && propTime !== seek.to) {
+    const position = shown ?? seek.to;
+    if (p.mode === "playback" && propTime !== null && propTime !== lastWritten.current && propTime !== seek.to
+        && Math.abs(propTime - position) > 2000) {
         setSeek({ to: propTime, nonce: seek.nonce + 1 });
+        // bring the target into the fetched timeline range, or the player waits forever
+        setFollow(false);
+        setViewEnd(Math.min(Date.now(), propTime + zoomMs / 2));
     }
 
     const write = (key: string, value: unknown) => props.store.props.write(key, value);
     const goPlayback = (t: number) => {
+        if (t < viewEnd - zoomMs || t > viewEnd) {
+            setFollow(false);
+            setViewEnd(Math.min(Date.now(), t + zoomMs / 2));
+        }
         lastWritten.current = Math.round(t);
         write("playbackTime", lastWritten.current);
         write("mode", "playback");
@@ -98,7 +109,8 @@ export function CameraView(props: ComponentProps<CameraViewProps>) {
     };
 
     const [refresh, setRefresh] = React.useState(0);
-    const timeline = useTimelines(p.showTimeline || p.mode === "playback" ? delegate : undefined, camera ? [camera] : [], viewEnd, zoomMs, refresh);
+    const tl = useTimelines(p.showTimeline || p.mode === "playback" ? delegate : undefined, camera ? [camera] : [], viewEnd, zoomMs, refresh);
+    const timeline = tl.data;
     const spans = timeline[camera]?.spans ?? [];
     const markers: Marker[] = React.useMemo(() => (timeline[camera]?.markers ?? []).map(m => ({
         t: m.t, end: m.end, label: m.label || (m.kind === "event" ? "event" : "bookmark"), kind: m.kind,
@@ -153,7 +165,8 @@ export function CameraView(props: ComponentProps<CameraViewProps>) {
                     <LivePlayer resolveUrl={resolveUrl} streamKey={`${camera}|${effective}`} muted={p.muted} objectFit={p.objectFit}
                         onState={(s, detail) => setLiveState({ s, detail })} />
                 ) : (
-                    <PlaybackPlayer windowUrl={windowUrl} spans={spans} seekTo={seek.to} seekNonce={seek.nonce}
+                    <PlaybackPlayer windowUrl={windowUrl} spans={spans} spansFrom={tl.from} spansTo={tl.to}
+                        seekTo={seek.to} seekNonce={seek.nonce}
                         playing={playing} rate={rate} objectFit={p.objectFit} onTime={onTime}
                         onState={(s, detail) => {
                             setPbState({ s, detail });

@@ -9,7 +9,7 @@ const REFRESH_MS = 30000;
  * not refetch.
  */
 export function useTimelines(delegate: CameraDelegate | undefined, cameras: string[], viewEnd: number, zoomMs: number, refreshNonce = 0) {
-    const [data, setData] = React.useState<Record<string, TimelineResult>>({});
+    const [data, setData] = React.useState<{ data: Record<string, TimelineResult>; from?: number; to?: number }>({ data: {} });
     const key = cameras.join("\u0000");
     // quantise so panning by a few pixels does not trigger a fetch
     const bucket = Math.ceil(viewEnd / (zoomMs / 4));
@@ -25,16 +25,18 @@ export function useTimelines(delegate: CameraDelegate | undefined, cameras: stri
             return;
         }
         let cancelled = false;
-        const end = Math.min(Date.now(), bucket * (zoomMs / 4) + zoomMs / 2);
+        // up to now + a little, so a span still being recorded counts as covering "now"
+        const end = Math.min(Date.now() + 60000, bucket * (zoomMs / 4) + zoomMs / 2);
         const start = end - zoomMs * 2;
         timelines(delegate, cameras, start, end)
-            .then(t => !cancelled && setData(t))
-            .catch(e => !cancelled && setData(Object.fromEntries(cameras.map(c => [c, { spans: [], error: (e as Error).message }]))));
+            .then(t => !cancelled && setData({ data: t, from: start, to: end }))
+            .catch(e => !cancelled && setData({ data: Object.fromEntries(cameras.map(c => [c, { spans: [], error: (e as Error).message }])) }));
         return () => {
             cancelled = true;
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [delegate, key, bucket, zoomMs, tick, refreshNonce]);
 
+    /** Per-camera spans/markers plus the time range they cover. */
     return data;
 }

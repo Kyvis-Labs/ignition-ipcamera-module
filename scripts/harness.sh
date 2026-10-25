@@ -18,18 +18,28 @@ cat > "$out/index.html" <<'HTML'
 <body><div id="root"></div><script src="harness.js"></script></body></html>
 HTML
 
+# Retries for a while: right after a gateway restart the module's routes are not up yet, and
+# an empty token would only show up later as unexplained 401s in the browser.
 mint() {
-  curl -fsS -X POST -H "X-Ignition-API-Token: $api_token" -H 'Content-Type: application/json' \
-    -d "$1" "$gw/data/camera/token" | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])'
+  local tok
+  for _ in $(seq 1 30); do
+    tok="$(curl -fsS -X POST -H "X-Ignition-API-Token: $api_token" -H 'Content-Type: application/json' \
+      -d "$1" "$gw/data/camera/token" 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])' 2>/dev/null)" || true
+    [ -n "$tok" ] && { echo "$tok"; return; }
+    sleep 2
+  done
+  echo "could not mint a token for $1" >&2
+  exit 1
 }
 {
   echo '{"base": "https://cams.example.com", "cameras": {'
   sep=""
   for c in "${cams[@]}"; do
-    printf '%s"%s": {"main": "%s", "sub": "%s", "playback": "%s"}' "$sep" "$c" \
-      "$(mint "{\"camera\":\"$c\",\"ttlSec\":28800}")" \
-      "$(mint "{\"camera\":\"$c\",\"quality\":\"sub\",\"ttlSec\":28800}")" \
-      "$(mint "{\"camera\":\"$c\",\"action\":\"playback\",\"ttlSec\":28800}")"
+    main="$(mint "{\"camera\":\"$c\",\"ttlSec\":28800}")"
+    sub="$(mint "{\"camera\":\"$c\",\"quality\":\"sub\",\"ttlSec\":28800}")"
+    pb="$(mint "{\"camera\":\"$c\",\"action\":\"playback\",\"ttlSec\":28800}")"
+    [ -n "$main" ] && [ -n "$sub" ] && [ -n "$pb" ] || { echo "token minting failed for $c" >&2; exit 1; }
+    printf '%s"%s": {"main": "%s", "sub": "%s", "playback": "%s"}' "$sep" "$c" "$main" "$sub" "$pb"
     sep=", "
   done
   echo '}}'

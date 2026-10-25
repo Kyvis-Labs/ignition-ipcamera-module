@@ -108,14 +108,86 @@ public class EventService {
         }));
         resubscribe(next);
         syncOnvif(next);
+        next.forEach((camera, cfg) -> {
+            RecordingController c = controllers.get(camera);
+            if (c != null) {
+                c.retainKeys(key -> keyStillValid(cfg, key));
+            }
+            if (recovered.add(camera) && !scheduler.isShutdown()) {
+                scheduler.execute(() -> recover(camera, cfg));
+            }
+        });
+    }
+
+    /** Cameras whose stored events have been checked since startup. */
+    private final java.util.Set<String> recovered = ConcurrentHashMap.newKeySet();
+
+    /** Whether a trigger key still has a live source under this config. */
+    static boolean keyStillValid(CameraConfig cfg, String key) {
+        if (key.endsWith(":manual")) {
+            return true;
+        }
+        if (key.startsWith("tag:")) {
+            return cfg.recordMode() == RecordMode.TAG && cfg.recordTriggers().stream()
+                .anyMatch(t -> key.equals(tagKey(t)));
+        }
+        if (key.startsWith("event:")) {
+            return cfg.recordMode() == RecordMode.EVENT;
+        }
+        return false;
+    }
+
+    static String tagKey(TagTrigger t) {
+        String cond;
+        try {
+            cond = Condition.parse(t.condition()).toString();
+        } catch (IllegalArgumentException e) {
+            cond = String.valueOf(t.condition());
+        }
+        return "tag:" + t.tagPath() + "|" + cond;
+    }
+
+    /**
+     * Repairs what a crash or shutdown left behind: events still open (endMs 0) are closed now,
+     * and events/protected bookmarks that never got their clip are exported if the buffer still
+     * holds them.
+     */
+    void recover(String camera, CameraConfig cfg) {
+        try {
+            long now = clock.millis();
+            RecordingController c = controllers.get(camera);
+            CameraEvent live = c == null ? null : c.openEvent();
+            for (CameraEvent e : store.list(camera, 0, Long.MAX_VALUE)) {
+                if (live != null && live.id().equals(e.id())) {
+                    continue;
+                }
+                CameraEvent fixed = e;
+                if (e.open()) {
+                    fixed = e.withEnd(now);
+                    store.put(fixed);
+                    log.infof("Camera '%s': closed event %s left open by a restart", camera, e.id());
+                }
+                boolean wantsClip = fixed.kind() == CameraEvent.Kind.EVENT ? cfg.preRollSec() > 0 : fixed.protect();
+                long bufferMs = cfg.bufferRetentionMin() * 60_000L;
+                if (wantsClip && fixed.clips().isEmpty() && now - fixed.startMs() < bufferMs) {
+                    scheduleExport(fixed);
+                }
+            }
+        } catch (IOException ex) {
+            log.warnf("Camera '%s': could not check stored events: %s", camera, ex.getMessage());
+        }
     }
 
     private void syncOnvif(Map<String, CameraConfig> next) {
         for (String camera : List.copyOf(onvif.keySet())) {
             CameraConfig cfg = next.get(camera);
             if (cfg == null || !wantsOnvif(cfg) || !signature(cfg).equals(onvifSignature.get(camera))) {
-                onvif.remove(camera).close();
+                OnvifEventSubscriber old = onvif.remove(camera);
                 onvifSignature.remove(camera);
+                // close() unsubscribes over HTTP; never block config sync on a slow camera
+                Thread t = new Thread(old::close, "camera-onvif-close-" + camera);
+                t.setDaemon(true);
+                t.start();
             }
         }
         next.forEach((camera, cfg) -> {
@@ -123,7 +195,7 @@ public class EventService {
                 OnvifClient client = new OnvifClient(cfg.onvifDeviceUrl(), cfg.username(),
                     hooks.reveal(cfg.password(), "password for camera '" + camera + "'"));
                 OnvifEventSubscriber sub = new OnvifEventSubscriber(camera, client, cfg.eventTypes(),
-                    (cam, label, on) -> cameraEvent(cam, label, on), hooks::eventSourceHealth);
+                    (cam, key, label, on) -> cameraEvent(cam, key, label, on), hooks::eventSourceHealth);
                 onvif.put(camera, sub);
                 onvifSignature.put(camera, signature(cfg));
                 sub.start();
@@ -203,13 +275,19 @@ public class EventService {
             this.trigger = trigger;
             this.condition = condition;
             this.record = record;
-            this.key = "tag:" + trigger.tagPath() + "|" + condition;
+            this.key = tagKey(trigger);
         }
 
         @Override
         public void tagChanged(TagChangeEvent e) {
             QualifiedValue qv = e.getValue();
-            boolean now = qv != null && qv.getQuality().isGood() && condition.test(qv.getValue());
+            boolean good = qv != null && qv.getQuality().isGood();
+            if (!good && !record) {
+                // bad quality is "unknown", not a falling edge: a provider reconnect must not
+                // look like a fresh rising edge and drop a bookmark
+                return;
+            }
+            boolean now = good && condition.test(qv.getValue());
             boolean rising = now && !Boolean.TRUE.equals(last);
             boolean initial = last == null;
             last = now;
@@ -274,12 +352,16 @@ public class EventService {
         c.trigger(source + ":manual", on, label, source);
     }
 
-    /** Opens/extends an event from a camera-originated event source (ONVIF etc.). */
-    public void cameraEvent(String camera, String topic, boolean on) {
+    /**
+     * Opens/extends an event from a camera-originated event source (ONVIF etc.). {@code key}
+     * identifies the detector (topic + source), so two motion regions are tracked separately.
+     * Releases always pass through, so a mode change cannot strand a key.
+     */
+    public void cameraEvent(String camera, String key, String label, boolean on) {
         RecordingController c = controllers.get(camera);
         CameraConfig cfg = cameras.get(camera);
-        if (c != null && cfg != null && cfg.recordMode() == RecordMode.EVENT) {
-            c.trigger("event:" + topic, on, topic, "event");
+        if (c != null && (!on || (cfg != null && cfg.recordMode() == RecordMode.EVENT))) {
+            c.trigger("event:" + key, on, label, "event");
         }
     }
 
@@ -319,9 +401,13 @@ public class EventService {
     public void tick() {
         controllers.values().forEach(RecordingController::tick);
         long now = clock.millis();
-        if (now - lastRetention >= RETENTION_PERIOD_MS) {
+        if (now - lastRetention >= RETENTION_PERIOD_MS && !scheduler.isShutdown()) {
             lastRetention = now;
-            scheduler.execute(this::applyRetention);
+            try {
+                scheduler.execute(this::applyRetention);
+            } catch (java.util.concurrent.RejectedExecutionException e) {
+                // shutting down
+            }
         }
     }
 
@@ -366,7 +452,11 @@ public class EventService {
 
     private void scheduleExport(CameraEvent e) {
         long delay = Math.max(0, e.endMs() + EXPORT_DELAY_MS - clock.millis());
-        scheduler.schedule(() -> export(e, 0), delay, TimeUnit.MILLISECONDS);
+        try {
+            scheduler.schedule(() -> export(e, 0), delay, TimeUnit.MILLISECONDS);
+        } catch (java.util.concurrent.RejectedExecutionException ex) {
+            // shutting down: recover() exports it on the next start while the buffer still has it
+        }
     }
 
     /**
@@ -398,8 +488,12 @@ public class EventService {
             }
             store.put(e.withClips(parts));
         } catch (Exception ex) {
-            if (attempt < 3) {
-                scheduler.schedule(() -> export(e, attempt + 1), 10L << attempt, TimeUnit.SECONDS);
+            if (attempt < 3 && !scheduler.isShutdown()) {
+                try {
+                    scheduler.schedule(() -> export(e, attempt + 1), 10L << attempt, TimeUnit.SECONDS);
+                } catch (java.util.concurrent.RejectedExecutionException rejected) {
+                    // shutting down; recover() retries on the next start
+                }
             } else {
                 log.warnf("Camera '%s': could not export clip for %s: %s", e.camera(), e.id(), ex.getMessage());
             }

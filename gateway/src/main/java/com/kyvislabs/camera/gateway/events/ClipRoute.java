@@ -57,11 +57,21 @@ public final class ClipRoute {
             .mount();
     }
 
+    /** Empty, or a number that fits a long (18 digits is plenty for any file). */
+    private static boolean fits(String digits) {
+        return digits.length() <= 18;
+    }
+
     static void serve(Path file, String range, HttpServletResponse res) throws Exception {
         long size = Files.size(file);
         long start = 0;
         long end = size - 1;
         Matcher m = range == null ? null : RANGE.matcher(range.trim());
+        if (m != null && m.matches() && (m.group(1).isEmpty() && m.group(2).isEmpty() || !fits(m.group(1)) || !fits(m.group(2)))) {
+            res.setStatus(HttpServletResponse.SC_REQUESTED_RANGE_NOT_SATISFIABLE);
+            res.setHeader("Content-Range", "bytes */" + size);
+            return;
+        }
         if (m != null && m.matches()) {
             if (m.group(1).isEmpty()) {
                 start = Math.max(0, size - Long.parseLong(m.group(2)));
