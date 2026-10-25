@@ -1,0 +1,28 @@
+{
+  "type": "object",
+  "properties": {
+    "cameras": {
+      "type": "array",
+      "description": "Cameras to show, in order. Each item is a camera name or {camera, label}.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "camera": {"type": "string"},
+          "label": {"type": "string", "description": "Shown instead of the camera name."}
+        }
+      },
+      "default": []
+    },
+    "columns": {"type": "integer", "description": "Grid columns; 0 = square-ish automatic layout.", "default": 0},
+    "rows": {"type": "integer", "description": "Grid rows; 0 = automatic. More cameras than columns x rows are paged.", "default": 0},
+    "mode": {"type": "string", "enum": ["live", "playback"], "description": "live, or synchronised playback of every tile at playbackTime.", "default": "live"},
+    "playbackTime": {"type": ["number", "null"], "format": "date", "description": "Shared playback position (epoch ms). Written back about once a second; writing it seeks every tile.", "default": null},
+    "maxLiveStreams": {"type": "integer", "description": "Most live tiles connected at once (decoder/bandwidth budget). Further tiles show a paused placeholder.", "default": 16},
+    "tourSeconds": {"type": "integer", "description": "Advance to the next page every N seconds; 0 = off.", "default": 0},
+    "objectFit": {"type": "string", "enum": ["contain", "cover", "fill"], "default": "cover"},
+    "gap": {"type": "integer", "description": "Pixels between tiles.", "default": 2},
+    "showStatus": {"type": "boolean", "default": true},
+    "showControls": {"type": "boolean", "default": true},
+    "showTimeline": {"type": "boolean", "description": "Timeline of the union of the shown cameras' recordings.", "default": true}
+  }
+}

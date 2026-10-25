@@ -16,6 +16,7 @@ import com.inductiveautomation.perspective.gateway.api.ComponentModelDelegateReg
 import com.inductiveautomation.perspective.gateway.api.PerspectiveContext;
 import com.kyvislabs.camera.common.CameraModule;
 import com.kyvislabs.camera.common.CameraViewComponent;
+import com.kyvislabs.camera.common.CameraWallComponent;
 import com.kyvislabs.camera.gateway.auth.AuthRoute;
 import com.kyvislabs.camera.gateway.auth.TokenService;
 import com.kyvislabs.camera.gateway.config.CameraConfig;
@@ -98,8 +99,10 @@ public class CameraGatewayHook extends AbstractGatewayModuleHook {
         PerspectiveContext perspective = PerspectiveContext.get(context);
         componentRegistry = perspective.getComponentRegistry();
         componentRegistry.registerComponent(CameraViewComponent.DESCRIPTOR);
+        componentRegistry.registerComponent(CameraWallComponent.DESCRIPTOR);
         delegateRegistry = perspective.getComponentModelDelegateRegistry();
         delegateRegistry.register(CameraViewComponent.COMPONENT_ID, c -> new CameraComponentDelegate(c, services));
+        delegateRegistry.register(CameraWallComponent.COMPONENT_ID, c -> new CameraComponentDelegate(c, services));
         log.infof("Camera module started (event storage %s)", events.store().root());
     }
 
@@ -120,9 +123,11 @@ public class CameraGatewayHook extends AbstractGatewayModuleHook {
     public void shutdown() {
         if (componentRegistry != null) {
             componentRegistry.removeComponent(CameraViewComponent.COMPONENT_ID);
+            componentRegistry.removeComponent(CameraWallComponent.COMPONENT_ID);
         }
         if (delegateRegistry != null) {
             delegateRegistry.remove(CameraViewComponent.COMPONENT_ID);
+            delegateRegistry.remove(CameraWallComponent.COMPONENT_ID);
         }
         if (manager != null) {
             manager.shutdown();

@@ -164,6 +164,23 @@ export function PlaybackPlayer(props: PlaybackPlayerProps) {
         }
     }, [props.seekTo, props.seekNonce, hasSpans, seek]);
 
+    // A synced player that is idle (in a gap, or ended) rejoins once the master clock enters
+    // recorded time. Checked at most every 2 s so a stream of clock ticks cannot thrash it.
+    const lastRejoin = React.useRef(0);
+    React.useEffect(() => {
+        const t = props.syncTime;
+        if (t === undefined || !props.playing || performance.now() - lastRejoin.current < 2000) {
+            return;
+        }
+        const el = els()[st.current.active];
+        const win = st.current.win[st.current.active];
+        const idle = !win || el.ended || el.paused;
+        if (idle && nextRecorded(currentSpans(props.spans), t) === t) {
+            lastRejoin.current = performance.now();
+            seek(t);
+        }
+    }, [props.syncTime, props.playing, props.spans, seek]);
+
     // play / pause / rate
     React.useEffect(() => {
         const el = els()[st.current.active];
@@ -208,7 +225,8 @@ export function PlaybackPlayer(props: PlaybackPlayerProps) {
                 const target = (p.syncTime - win.startMs) / 1000;
                 if (target >= 0 && target < el.duration) {
                     el.currentTime = target;
-                } else {
+                } else if (nextRecorded(currentSpans(p.spans), p.syncTime) === p.syncTime) {
+                    // only chase the master clock into recorded time; in a gap, wait for it
                     seek(p.syncTime);
                 }
             }
@@ -234,8 +252,13 @@ export function PlaybackPlayer(props: PlaybackPlayerProps) {
             } else {
                 const win = st.current.win[slot];
                 const reached = win ? win.startMs + els()[slot].duration * 1000 : 0;
-                // ended early at a gap: carry on from the next recorded instant
+                // ended early at a gap: carry on from the next recorded instant (a synced tile
+                // waits instead, and rejoins when the master clock reaches recorded time)
                 const resume = nextRecorded(currentSpans(latest.current.spans), reached + 500);
+                if (latest.current.syncTime !== undefined && resume !== null) {
+                    latest.current.onState?.("gap");
+                    return;
+                }
                 if (resume !== null && Date.now() - resume > OPEN_SPAN_MS) {
                     latest.current.onState?.("gap");
                     seek(resume);

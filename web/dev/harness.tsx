@@ -4,6 +4,7 @@
 import * as React from "react";
 import { createRoot } from "react-dom/client";
 import { CameraView } from "../src/components/CameraView";
+import { CameraWall } from "../src/components/CameraWall";
 import { CameraDelegate } from "../src/delegate";
 
 interface Tokens {
@@ -16,7 +17,10 @@ class HarnessDelegate extends CameraDelegate {
         super({});
     }
 
+    calls: Record<string, number> = {};
+
     async request(op: string, payload: any): Promise<any> {
+        this.calls[op] = (this.calls[op] ?? 0) + 1;
         const { base, cameras } = this.tokens;
         switch (op) {
             case "live": {
@@ -69,6 +73,21 @@ function fakeComponentProps(props: any, delegate: CameraDelegate, el: HTMLElemen
     } as any;
 }
 
+function WallApp({ tokens }: { tokens: Tokens }) {
+    const delegate = React.useMemo(() => new HarnessDelegate(tokens), [tokens]);
+    const [wprops, setWprops] = React.useState<any>({
+        cameras: Object.keys(tokens.cameras).map(c => ({ camera: c })), columns: 0, rows: 0, mode: "live",
+        playbackTime: null, maxLiveStreams: 16, tourSeconds: 0, objectFit: "cover", showStatus: true,
+        showControls: true, showTimeline: true, gap: 2,
+    });
+    (window as any).__harness = { set: (k: string, v: unknown) => setWprops((p: any) => ({ ...p, [k]: v })), get: () => wprops, delegate };
+    return (
+        <div style={{ width: 1100, height: 700 }}>
+            <CameraWall {...fakeComponentProps(wprops, delegate, null, (k, v) => setWprops((p: any) => ({ ...p, [k]: v })))} />
+        </div>
+    );
+}
+
 function App({ tokens }: { tokens: Tokens }) {
     const delegate = React.useMemo(() => new HarnessDelegate(tokens), [tokens]);
     const host = React.useRef<HTMLDivElement>(null);
@@ -87,5 +106,6 @@ function App({ tokens }: { tokens: Tokens }) {
 }
 
 fetch("tokens.json").then(r => r.json()).then((tokens: Tokens) => {
-    createRoot(document.getElementById("root")!).render(<App tokens={tokens} />);
+    const wall = new URLSearchParams(location.search).has("wall");
+    createRoot(document.getElementById("root")!).render(wall ? <WallApp tokens={tokens} /> : <App tokens={tokens} />);
 });

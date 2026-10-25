@@ -1,6 +1,6 @@
 # Camera Module
 
-An Ignition module that adds IP camera live view, recording and playback to Perspective. Cameras are configured on the gateway and shown with the Camera View component. The module uses [MediaMTX](https://github.com/bluenviron/mediamtx) to pull, record and serve video. MediaMTX runs as a separate service.
+An Ignition module that adds IP camera live view, recording and playback to Perspective. Cameras are configured on the gateway and shown with the Camera View and Camera Wall components. The module uses [MediaMTX](https://github.com/bluenviron/mediamtx) to pull, record and serve video. MediaMTX runs as a separate service.
 
 The Camera Module provides support for:
 
@@ -18,7 +18,7 @@ Getting Started
 2. Build the module, see [Building](#building)
 3. Install the module into Ignition 8.3.9+. Start the gateway with `-Dignition.allowunsignedmodules=true`.
 4. Set the media server settings and add your cameras through the gateway REST API, under `/data/api/v1/resources/com.kyvislabs.camera/`
-5. Add a Camera View component to a Perspective view and enter the camera name
+5. Add a Camera View or Camera Wall component to a Perspective view and select your camera
 
 # Architecture
 
@@ -34,6 +34,8 @@ MediaMTX ── RTSP/RTSPS ──▶ Cameras
 ```
 
 MediaMTX pulls the camera streams and records them. The gateway owns the configuration and decides who can see what. Browsers connect to MediaMTX directly, so it needs to be reachable over HTTPS, usually through a reverse proxy.
+
+Video is passed through as the camera sends it. A Camera Wall should use camera substreams, otherwise every tile decodes the full resolution stream.
 
 # Cameras
 
@@ -81,6 +83,23 @@ Tag driven bookmarks work in any record mode.
 | `allowBookmarks` | `true` | Shows the bookmark button |
 
 Events: `onModeChange`, `onBookmark` and `onMarkerClick`.
+
+## Camera Wall
+
+`kyvislabs.camera.wall`
+
+| Prop | Default | Description |
+|---|---|---|
+| `cameras` | `[]` | Camera names, or `{camera, label}` |
+| `columns`, `rows` | `0` | Grid size, `0` for automatic. Extra cameras go on more pages. |
+| `gap` | `2` | Pixels between tiles |
+| `tourSeconds` | `0` | Seconds between pages, `0` for off |
+| `mode`, `playbackTime` | | Shared by all tiles |
+| `objectFit` | `cover` | Same as Camera View |
+| `maxLiveStreams` | `16` | Maximum tiles playing live at once |
+| `showStatus`, `showControls`, `showTimeline` | `true` | Shows each part |
+
+Double click a tile to maximize it and switch to the main stream. Double click again to return.
 
 # Tags
 
