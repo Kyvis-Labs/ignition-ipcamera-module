@@ -27,32 +27,37 @@ const globalsPlugin = {
     },
 };
 
-// The gateway web UI page is loaded by the gateway's SystemJS (with its AMD extra), which
-// supplies React from its import map. Wrapping the IIFE in define([...]) makes it an AMD
-// module whose exports are the IIFE's return value.
-const amdExternals = {
-    name: "amd-externals",
-    setup(build) {
-        build.onResolve({ filter: /^react(-dom)?$/ }, args => ({ path: args.path, namespace: "amd" }));
-        build.onLoad({ filter: /.*/, namespace: "amd" }, args => ({
-            contents: `module.exports = ${args.path === "react" ? "__amd_react" : "__amd_react_dom"};`,
-            loader: "js",
-        }));
-    },
-};
+// The gateway web UI pages are loaded by the gateway's SystemJS (with its AMD extra) and are
+// built from the gateway's own React, form and component libraries, which its import map
+// supplies. They are bundled as CommonJS with those libraries external, and wrapped in
+// define([...]) so SystemJS hands them in as the require() results.
+const gatewayLibs = [
+    "react",
+    "react-dom",
+    "react-hook-form",
+    "react-router-dom",
+    "@inductiveautomation/ignition-web-ui",
+    "@inductiveautomation/ignition-gateway-lib",
+    "@inductiveautomation/ignition-icons",
+];
 
 await esbuild.build({
     entryPoints: { "config-page": "src/config/index.ts" },
     bundle: true,
-    format: "iife",
-    globalName: "__cameraConfigPage",
+    format: "cjs",
     target: "es2020",
     outdir,
     sourcemap: "linked",
     minify: process.env.NODE_ENV === "production",
-    plugins: [amdExternals],
-    banner: { js: 'define(["react", "react-dom"], function (__amd_react, __amd_react_dom) {' },
-    footer: { js: "return __cameraConfigPage;\n});" },
+    external: gatewayLibs,
+    banner: {
+        js: `define(${JSON.stringify(gatewayLibs)}, function () {\n`
+            + "var __libs = {}, __args = arguments;\n"
+            + `${JSON.stringify(gatewayLibs)}.forEach(function (n, i) { __libs[n] = __args[i]; });\n`
+            + "var require = function (n) { if (!(n in __libs)) throw new Error('not in the gateway import map: ' + n); return __libs[n]; };\n"
+            + "var module = { exports: {} }, exports = module.exports;",
+    },
+    footer: { js: "return module.exports;\n});" },
     logLevel: "info",
 });
 

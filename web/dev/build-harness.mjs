@@ -4,16 +4,6 @@ import path from "node:path";
 
 const outdir = process.argv[2];
 await esbuild.build({
-    entryPoints: ["dev/config-harness.tsx"],
-    bundle: true,
-    format: "iife",
-    outfile: path.join(outdir, "config-harness.js"),
-    define: { "process.env.NODE_ENV": '"development"' },
-    sourcemap: "inline",
-    logLevel: "warning",
-});
-
-await esbuild.build({
     entryPoints: ["dev/harness.tsx"],
     bundle: true,
     format: "iife",

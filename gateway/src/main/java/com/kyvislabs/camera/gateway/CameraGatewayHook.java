@@ -51,15 +51,23 @@ public class CameraGatewayHook extends AbstractGatewayModuleHook {
         context.getConfigurationManager().getResourceTypeMetaRegistry()
             .register(MediaServerConfig.META)
             .register(CameraConfig.META);
-        // Connections -> Cameras: the config page is an AMD module served from /res/camera.
-        SystemJsModule page = new SystemJsModule("com.kyvislabs.camera.config", "/res/camera/config-page.js");
+        // Connections -> Cameras, built from the gateway's own resource grid and settings page.
+        // The pages are an AMD module served from /res/camera. The Media Server tab draws its own
+        // header (the settings page has the save bar in it), so it takes the tabs as customHeader.
+        SystemJsModule pages = new SystemJsModule("com.kyvislabs.camera.config", "/res/camera/config-page.js");
         context.getWebResourceManager().getNavigationModel().getConnections().addCategory("cameras", cat -> cat
             .label("Cameras")
             .addPage("Cameras", p -> p
                 .position(10)
-                .mount("/cameras", "CameraConfigPage", page)
-                .addAssociatedResourceType(CameraConfig.TYPE)
-                .addAssociatedResourceType(MediaServerConfig.TYPE)));
+                .addTab("Cameras", t -> t
+                    .position(0)
+                    .mount("/connections/cameras/devices", "CamerasPage", pages)
+                    .addAssociatedResourceType(CameraConfig.TYPE))
+                .addTab("Media Server", t -> t
+                    .position(1)
+                    .customHeader(true)
+                    .mount("/connections/cameras/media-server", "MediaServerPage", pages)
+                    .addAssociatedResourceType(MediaServerConfig.TYPE))));
 
         statusTags = new StatusTags(context);
         tokens = new TokenService();

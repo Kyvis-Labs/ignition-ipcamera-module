@@ -20,10 +20,17 @@ import org.w3c.dom.Element;
  * WS-Discovery for ONVIF video devices. Multicast reaches cameras on the gateway's own L2
  * segment; a gateway in a bridged container (the usual Docker setup) only sees its bridge, so
  * a unicast sweep of a subnet (Probe sent straight to each address's port 3702) is offered too.
+ *
+ * <p>Probes go out from a fixed local port ({@value #LOCAL_PORT}, or the {@code camera.discovery.port}
+ * system property) because cameras answer a multicast Probe by unicast to its source port. A host
+ * firewall's connection tracking cannot pair those replies with a packet sent to a multicast group,
+ * so it treats them as new inbound traffic; a fixed port is what makes them allowable by one rule.
+ * If the port is busy (another discovery in progress) an ephemeral one is used instead.
  */
 public final class OnvifDiscovery {
     private static final String MULTICAST = "239.255.255.250";
     private static final int PORT = 3702;
+    private static final int LOCAL_PORT = 3702;
 
     public record Device(String address, List<String> xaddrs, String name, String hardware, String endpoint) {
     }
@@ -50,7 +57,7 @@ public final class OnvifDiscovery {
     public static List<Device> discover(List<InetAddress> sweep, int waitMs) throws IOException {
         byte[] msg = probe().getBytes(StandardCharsets.UTF_8);
         Map<String, Device> found = new LinkedHashMap<>();
-        try (DatagramSocket socket = new DatagramSocket()) {
+        try (DatagramSocket socket = open()) {
             socket.setBroadcast(true);
             socket.send(new DatagramPacket(msg, msg.length, new InetSocketAddress(MULTICAST, PORT)));
             for (InetAddress a : sweep) {
@@ -73,6 +80,15 @@ public final class OnvifDiscovery {
             }
         }
         return new ArrayList<>(found.values());
+    }
+
+    private static DatagramSocket open() throws IOException {
+        int port = Integer.getInteger("camera.discovery.port", LOCAL_PORT);
+        try {
+            return new DatagramSocket(port);
+        } catch (java.net.BindException e) {
+            return new DatagramSocket();
+        }
     }
 
     static List<Device> parseMatches(String from, String text) {
