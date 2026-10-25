@@ -13,13 +13,18 @@ import com.inductiveautomation.ignition.common.gson.JsonObject;
 import com.kyvislabs.camera.gateway.config.CameraConfig;
 import com.kyvislabs.camera.gateway.config.MediaServerConfig;
 import com.kyvislabs.camera.gateway.config.RecordMode;
+import com.kyvislabs.camera.gateway.config.TranscodeProfile;
+import com.kyvislabs.camera.gateway.transcode.Ffmpeg;
 
 /**
  * Translates a camera into the MediaMTX path configs that should exist for it. Pure, so the
  * reconciler and the tests share one definition of "desired state".
  *
  * <p>Each camera gets {@code cam/<name>} (main stream, the one that records) and, when a
- * substream is configured, {@code cam/<name>/sub} (never recorded). Only the keys set here are
+ * substream is configured, {@code cam/<name>/sub} (never recorded). With transcoding on, each
+ * profile adds an on-demand {@code cam/<name>/tx/<profile>} fed from the main stream and, with a
+ * substream, {@code cam/<name>/sub/tx/<profile>} fed from that: MediaMTX starts the ffmpeg when
+ * the first reader arrives and stops it after the last leaves. Only the keys set here are
  * compared during reconciliation; MediaMTX fills every other key with its defaults.
  */
 public final class PathConfigs {
@@ -36,22 +41,32 @@ public final class PathConfigs {
         return PREFIX + camera + "/sub";
     }
 
+    /** The transcode of a camera's main stream (or substream) to a profile. */
+    public static String txPath(String camera, String profile, boolean fromSub) {
+        return (fromSub ? subPath(camera) : mainPath(camera)) + "/tx/" + profile;
+    }
+
+    public static boolean isTranscode(String path) {
+        return path != null && path.startsWith(PREFIX) && path.contains("/tx/");
+    }
+
+    private static final Pattern OURS = Pattern.compile("cam/([^/]+)(/sub)?(/tx/[^/]+)?");
+
     /** The camera name for a module-managed path, or null if the path is not ours. */
     public static String cameraOf(String path) {
-        if (path == null || !path.startsWith(PREFIX)) {
-            return null;
-        }
-        String rest = path.substring(PREFIX.length());
-        return rest.endsWith("/sub") ? rest.substring(0, rest.length() - 4) : rest;
+        Matcher m = path == null ? null : OURS.matcher(path);
+        return m != null && m.matches() ? m.group(1) : null;
     }
 
     /**
      * @param password     plaintext camera password, or null
      * @param recordingNow EVENT/TAG with no pre-roll only: whether an event is currently open,
      *                     since recording is then switched on and off directly
+     * @param transcoderAuth {@code user:token} the transcoder's ffmpeg authenticates with, or
+     *                       null for no transcode paths
      */
-    public static Map<String, JsonObject> desired(
-        String camera, CameraConfig c, String password, MediaServerConfig server, boolean recordingNow) {
+    public static Map<String, JsonObject> desired(String camera, CameraConfig c, String password,
+                                                  MediaServerConfig server, boolean recordingNow, String transcoderAuth) {
 
         Map<String, JsonObject> out = new LinkedHashMap<>();
 
@@ -88,6 +103,7 @@ public final class PathConfigs {
             segment = Math.max(1, Math.min(segment, c.bufferRetentionMin() / 2));
         }
         main.addProperty("recordSegmentDuration", segment + "m");
+        main.addProperty("recordPath", server.recordingsPath() + "/%path/%Y-%m-%d_%H-%M-%S-%f");
         out.put(mainPath(camera), main);
 
         if (c.hasSubstream()) {
@@ -95,7 +111,26 @@ public final class PathConfigs {
             sub.addProperty("record", false);
             out.put(subPath(camera), sub);
         }
+        if (server.transcodeEnabled() && transcoderAuth != null) {
+            for (TranscodeProfile p : server.transcodeProfiles()) {
+                out.put(txPath(camera, p.name(), false), transcode(server, p, mainPath(camera), transcoderAuth));
+                if (c.hasSubstream()) {
+                    out.put(txPath(camera, p.name(), true), transcode(server, p, subPath(camera), transcoderAuth));
+                }
+            }
+        }
         return out;
+    }
+
+    private static JsonObject transcode(MediaServerConfig server, TranscodeProfile p, String input, String auth) {
+        JsonObject o = new JsonObject();
+        o.addProperty("source", "publisher");
+        o.addProperty("record", false);
+        o.addProperty("runOnDemand", Ffmpeg.join(Ffmpeg.live(server, p, input, auth)));
+        o.addProperty("runOnDemandRestart", true);
+        o.addProperty("runOnDemandStartTimeout", "20s");
+        o.addProperty("runOnDemandCloseAfter", server.transcodeIdleSec() + "s");
+        return o;
     }
 
     private static JsonObject source(CameraConfig c, String url, String password) {

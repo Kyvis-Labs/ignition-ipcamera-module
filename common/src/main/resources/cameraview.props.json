@@ -26,12 +26,7 @@
     },
     "quality": {
       "type": "string",
-      "enum": [
-        "auto",
-        "main",
-        "sub"
-      ],
-      "description": "Which stream to show. auto uses the substream when the component is rendered at 720px wide or less.",
+      "description": "Which stream to show: auto (the substream when the component is 720px wide or less), main, sub, or the name of a transcode profile set on the gateway (e.g. 720p) to watch and play back at that size. A stream this browser cannot decode is transcoded automatically.",
       "default": "auto"
     },
     "muted": {

@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.function.Supplier;
 
+import com.inductiveautomation.ignition.common.gson.JsonArray;
 import com.inductiveautomation.ignition.common.gson.JsonObject;
 import com.inductiveautomation.ignition.common.gson.JsonParser;
 import com.inductiveautomation.ignition.gateway.dataroutes.HttpMethod;
@@ -25,7 +26,8 @@ import jakarta.servlet.http.HttpServletResponse;
  *
  * <ul>
  *   <li>{@code GET /data/camera/status} -- every camera with its stream state.</li>
- *   <li>{@code POST /data/camera/token} {@code {camera, quality?, action?: "read"|"playback",
+ *   <li>{@code POST /data/camera/token} {@code {camera, quality?: "main"|"sub"|<profile>, accept?: [codec],
+ *   action?: "read"|"playback",
  *   ttlSec?}} -- stream URLs plus a scoped token, for clients outside Perspective.</li>
  *   <li>{@code POST /data/camera/event} {@code {camera, on, label?}} -- holds an EVENT/TAG
  *   camera's event open while {@code on}; the post-roll starts when released.</li>
@@ -69,10 +71,27 @@ public final class AdminRoutes {
                     err.addProperty("error", "no camera named '" + camera + "'");
                     return err;
                 }
-                boolean sub = body.has("quality") && "sub".equals(body.get("quality").getAsString()) && cfg.hasSubstream();
+                String quality = body.has("quality") ? body.get("quality").getAsString() : "main";
                 boolean playback = body.has("action") && "playback".equals(body.get("action").getAsString());
                 long ttl = body.has("ttlSec") ? Math.min(body.get("ttlSec").getAsLong(), 86_400) : 600;
-                String path = sub ? PathConfigs.subPath(camera) : PathConfigs.mainPath(camera);
+                String path;
+                if (playback) {
+                    path = PathConfigs.mainPath(camera);
+                } else {
+                    // the same choice a Perspective viewer gets: substream, profile transcode, or main
+                    java.util.Set<String> accept = new java.util.HashSet<>();
+                    if (body.has("accept")) {
+                        body.getAsJsonArray("accept").forEach(e -> accept.add(e.getAsString()));
+                    }
+                    var choice = services.transcoder().live(camera, cfg, quality, accept, 0);
+                    if (choice.error() != null) {
+                        res.setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+                        JsonObject err = new JsonObject();
+                        err.addProperty("error", choice.error());
+                        return err;
+                    }
+                    path = choice.path();
+                }
                 String token = services.tokens().mint(Set.of(path),
                     Set.of(playback ? TokenService.Action.PLAYBACK : TokenService.Action.READ),
                     Duration.ofSeconds(ttl), req.getActor());
@@ -227,6 +246,14 @@ public final class AdminRoutes {
         out.add("cameras", cams);
         out.addProperty("mediaServer", m.server().apiUrl());
         out.addProperty("tokens", services.tokens().size());
+        JsonObject tx = new JsonObject();
+        tx.addProperty("enabled", m.server().transcodeEnabled());
+        tx.addProperty("active", services.transcoder().active());
+        tx.addProperty("max", m.server().maxTranscodes());
+        JsonArray running = new JsonArray();
+        services.transcoder().activeLive().forEach(running::add);
+        tx.add("live", running);
+        out.add("transcodes", tx);
         return out;
     }
 }

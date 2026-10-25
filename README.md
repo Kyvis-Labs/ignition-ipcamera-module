@@ -9,8 +9,9 @@ The Camera Module provides support for:
 3. Off, continuous, camera event and tag driven recording, with pre-roll and post-roll
 4. Timeline playback, bookmarks and event clips
 5. Live video over WebRTC
-6. Status tags in a tag provider called `Cameras`
-7. Scripting through `system.camera`
+6. Transcoding to H.264 for browsers that cannot decode a camera's codec, or to save bandwidth
+7. Status tags in a tag provider called `Cameras`
+8. Scripting through `system.camera`
 
 Getting Started
 ---------------
@@ -19,10 +20,12 @@ Getting Started
 2. Build the module, see [Building](#building)
 3. Install the module into Ignition 8.3.9+. Start the gateway with `-Dignition.allowunsignedmodules=true`.
 4. Log into the Ignition Gateway
-5. Click on `Connections > Cameras > Media Server` and enter the media server settings
-6. Click on the `Cameras` tab and click `Create Camera`
+5. Click on `Connections > Cameras > Settings` and enter the media server settings
+6. Click on `Connections > Cameras > Connections` and click `Create Camera`
 7. Enter the camera manually or click `Discover Cameras` to find ONVIF cameras
 8. Add a Camera View or Camera Wall component to a Perspective view and select your camera
+
+ffmpeg is not included. Install it on the gateway host if you need transcoding.
 
 # Architecture
 
@@ -39,7 +42,7 @@ MediaMTX ── RTSP/RTSPS ──▶ Cameras
 
 MediaMTX pulls the camera streams and records them. The gateway owns the configuration and decides who can see what. Browsers connect to MediaMTX directly, so it needs to be reachable over HTTPS, usually through a reverse proxy.
 
-Video is passed through as the camera sends it. A Camera Wall should use camera substreams, otherwise every tile decodes the full resolution stream.
+Without a transcode, video is passed through as the camera sends it. A Camera Wall should use camera substreams, otherwise every tile decodes the full resolution stream.
 
 # Cameras
 
@@ -81,7 +84,7 @@ Tag driven bookmarks work in any record mode.
 | `camera` | `""` | Camera name |
 | `mode` | `live` | `live` or `playback` |
 | `playbackTime` | `null` | Time in epoch ms. Updates while playing, and writing it seeks. |
-| `quality` | `auto` | `auto`, `main` or `sub` |
+| `quality` | `auto` | `auto`, `main`, `sub` or a transcode profile such as `720p` |
 | `muted` | `true` | Mutes the audio |
 | `objectFit` | `contain` | `contain`, `cover` or `fill` |
 | `showStatus` | `true` | Shows the name over the video |
@@ -143,9 +146,17 @@ system.camera.discoverOnvif("192.0.2.0/24")
 system.camera.getOnvifProfiles("http://192.0.2.20/onvif/device_service", "admin", "password")
 ```
 
+# Transcoding
+
+The gateway transcodes to H.264 when a browser cannot decode the camera's codec, or when a component asks for a profile. A substream close to the requested size is used instead when there is one.
+
+Viewers of the same camera and size share a live transcode, and it stops shortly after the last viewer leaves. `Maximum Active Transcodes` limits live and recording transcodes together.
+
+Encoders are CPU, VA-API, Intel Quick Sync and NVIDIA NVENC. A GPU encoder needs the device and its driver wherever ffmpeg runs. In a container, pass in the device, such as `/dev/dri`.
+
 # MediaMTX
 
-Run MediaMTX yourself, as a container or a service. The module was built against MediaMTX 1.21.2.
+Run MediaMTX yourself, as a container or a service. MediaMTX needs its `-ffmpeg` image for live transcoding. The module was built against MediaMTX 1.21.2.
 
 ```yaml
 api: yes
@@ -163,7 +174,7 @@ pathDefaults:
 paths: {}
 ```
 
-In the media server settings, enter the URLs the gateway uses to reach MediaMTX, the `Public URL` browsers use, and the same `Auth Callback Key`. Streams are refused until the key is set.
+In `Settings`, enter the URLs the gateway uses to reach MediaMTX, the `Public URL` browsers use, and the same `Auth Callback Key`. Streams are refused until the key is set.
 
 # Building
 

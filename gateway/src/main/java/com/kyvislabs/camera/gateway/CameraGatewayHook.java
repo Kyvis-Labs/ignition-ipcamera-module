@@ -19,6 +19,8 @@ import com.kyvislabs.camera.common.CameraModule;
 import com.kyvislabs.camera.common.CameraViewComponent;
 import com.kyvislabs.camera.common.CameraWallComponent;
 import com.kyvislabs.camera.gateway.auth.AuthRoute;
+import com.kyvislabs.camera.gateway.transcode.TranscodeRoute;
+import com.kyvislabs.camera.gateway.transcode.TranscodeService;
 import com.kyvislabs.camera.gateway.auth.TokenService;
 import com.kyvislabs.camera.gateway.config.CameraConfig;
 import com.kyvislabs.camera.gateway.config.MediaServerConfig;
@@ -38,6 +40,7 @@ public class CameraGatewayHook extends AbstractGatewayModuleHook {
     private TokenService tokens;
     private CameraManager manager;
     private EventService events;
+    private volatile TranscodeService transcoder;
     private CameraServices services;
     private SingletonResourceHandler<MediaServerConfig> serverHandler;
     private NamedResourceHandler<CameraConfig> cameraHandler;
@@ -51,23 +54,22 @@ public class CameraGatewayHook extends AbstractGatewayModuleHook {
         context.getConfigurationManager().getResourceTypeMetaRegistry()
             .register(MediaServerConfig.META)
             .register(CameraConfig.META);
-        // Connections -> Cameras, built from the gateway's own resource grid and settings page.
-        // The pages are an AMD module served from /res/camera. The Media Server tab draws its own
-        // header (the settings page has the save bar in it), so it takes the tabs as customHeader.
+        // Connections -> Cameras -> Settings / Connections, laid out like Databases and built from
+        // the gateway's own resource grid and settings page. The pages are an AMD module served
+        // from /res/camera.
         SystemJsModule pages = new SystemJsModule("com.kyvislabs.camera.config", "/res/camera/config-page.js");
         context.getWebResourceManager().getNavigationModel().getConnections().addCategory("cameras", cat -> cat
             .label("Cameras")
-            .addPage("Cameras", p -> p
-                .position(10)
-                .addTab("Cameras", t -> t
-                    .position(0)
-                    .mount("/connections/cameras/devices", "CamerasPage", pages)
-                    .addAssociatedResourceType(CameraConfig.TYPE))
-                .addTab("Media Server", t -> t
-                    .position(1)
-                    .customHeader(true)
-                    .mount("/connections/cameras/media-server", "MediaServerPage", pages)
-                    .addAssociatedResourceType(MediaServerConfig.TYPE))));
+            .addPage("Settings", p -> p
+                .title("Camera Settings")
+                .position(0)
+                .mount("/connections/cameras/settings", "SettingsPage", pages)
+                .addAssociatedResourceType(MediaServerConfig.TYPE))
+            .addPage("Connections", p -> p
+                .title("Camera Connections")
+                .position(1)
+                .mount("/connections/cameras/connections", "CamerasPage", pages)
+                .addAssociatedResourceType(CameraConfig.TYPE)));
 
         statusTags = new StatusTags(context);
         tokens = new TokenService();
@@ -120,7 +122,9 @@ public class CameraGatewayHook extends AbstractGatewayModuleHook {
             }
         });
         manager.setEvents(events);
-        services = new CameraServices(manager, tokens, events);
+        transcoder = new TranscodeService(manager, tokens::serviceToken, events.store().root());
+        manager.setTranscoder(transcoder);
+        services = new CameraServices(manager, tokens, events, transcoder);
 
         cameraHandler.startup();
         manager.startup();
@@ -174,9 +178,10 @@ public class CameraGatewayHook extends AbstractGatewayModuleHook {
 
     @Override
     public void mountRouteHandlers(RouteGroup routes) {
-        AuthRoute.mount(routes, tokens, manager::callbackKey);
+        AuthRoute.mount(routes, tokens, manager::callbackKey, path -> transcoder == null || transcoder.admit(path));
         AdminRoutes.mount(routes, () -> services);
         ClipRoute.mount(routes, () -> events.store(), tokens);
+        TranscodeRoute.mount(routes, () -> transcoder, manager::server, tokens);
     }
 
     @Override

@@ -17,7 +17,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * simply ask for a new one when they reconnect.
  */
 public class TokenService {
-    public enum Action { READ, PLAYBACK }
+    public enum Action { READ, PLAYBACK, PUBLISH }
 
     /** {@code paths == null} means every path: only the gateway's own service grant has that. */
     public record Grant(Set<String> paths, Set<Action> actions, Instant expires, String user) {
@@ -55,6 +55,32 @@ public class TokenService {
     }
 
     private String serviceToken;
+
+    /**
+     * The token MediaMTX's transcoder ffmpeg uses to read camera streams and publish transcodes.
+     * It is written into MediaMTX's path configs, so it is stable for the life of this service
+     * (a new one after a gateway restart makes the reconciler rewrite those paths).
+     * {@link AuthRoute} only honours its publish grant on transcode paths from loopback.
+     */
+    public synchronized String transcoderToken() {
+        if (transcoderToken == null) {
+            byte[] bytes = new byte[24];
+            RANDOM.nextBytes(bytes);
+            transcoderToken = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+            grants.put(transcoderToken, new Grant(null, Set.of(Action.READ, Action.PUBLISH), Instant.MAX, TRANSCODER));
+        }
+        return transcoderToken;
+    }
+
+    public static final String TRANSCODER = "transcoder";
+
+    private String transcoderToken;
+
+    /** The grant behind a token, if it is live. */
+    public Grant grant(String token) {
+        Grant g = token == null ? null : grants.get(token);
+        return g != null && Instant.now().isBefore(g.expires()) ? g : null;
+    }
 
     public boolean allows(String token, String path, Action action) {
         if (token == null || token.isEmpty() || path == null || action == null) {

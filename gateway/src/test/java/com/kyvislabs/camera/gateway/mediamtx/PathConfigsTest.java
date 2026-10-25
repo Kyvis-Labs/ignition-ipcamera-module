@@ -25,7 +25,7 @@ class PathConfigsTest {
 
     @Test
     void continuousRecordsWithRetention() {
-        Map<String, JsonObject> d = PathConfigs.desired("front", cam(RecordMode.CONTINUOUS, 10, ""), "p w", SERVER, false);
+        Map<String, JsonObject> d = PathConfigs.desired("front", cam(RecordMode.CONTINUOUS, 10, ""), "p w", SERVER, false, null);
         assertEquals(List.of("cam/front"), List.copyOf(d.keySet()));
         JsonObject main = d.get("cam/front");
         assertTrue(main.get("record").getAsBoolean());
@@ -36,14 +36,14 @@ class PathConfigsTest {
 
     @Test
     void substreamNeverRecords() {
-        Map<String, JsonObject> d = PathConfigs.desired("front", cam(RecordMode.CONTINUOUS, 10, "rtsp://192.0.2.5/sub"), null, SERVER, false);
+        Map<String, JsonObject> d = PathConfigs.desired("front", cam(RecordMode.CONTINUOUS, 10, "rtsp://192.0.2.5/sub"), null, SERVER, false, null);
         assertFalse(d.get("cam/front/sub").get("record").getAsBoolean());
         assertEquals("rtsp://admin@192.0.2.5/sub", d.get("cam/front/sub").get("source").getAsString());
     }
 
     @Test
     void tagModeWithPreRollRecordsIntoBuffer() {
-        JsonObject main = PathConfigs.desired("x", cam(RecordMode.TAG, 10, ""), null, SERVER, false).get("cam/x");
+        JsonObject main = PathConfigs.desired("x", cam(RecordMode.TAG, 10, ""), null, SERVER, false, null).get("cam/x");
         assertTrue(main.get("record").getAsBoolean());
         assertEquals("60m", main.get("recordDeleteAfter").getAsString());
     }
@@ -52,22 +52,22 @@ class PathConfigsTest {
     void shortBuffersGetShortSegments() {
         CameraConfig c = new CameraConfig(CameraType.RTSP, "rtsp://h/x", "", "", null, "", "tcp", "", RecordMode.TAG,
             7, 10, 5, 5, 30, List.of(), List.of(), List.of(), List.of(), List.of());
-        JsonObject main = PathConfigs.desired("x", c, null, SERVER, false).get("cam/x");
+        JsonObject main = PathConfigs.desired("x", c, null, SERVER, false, null).get("cam/x");
         assertEquals("5m", main.get("recordDeleteAfter").getAsString());
         assertEquals("2m", main.get("recordSegmentDuration").getAsString());
     }
 
     @Test
     void tagModeWithoutPreRollFollowsEventState() {
-        assertFalse(PathConfigs.desired("x", cam(RecordMode.TAG, 0, ""), null, SERVER, false).get("cam/x").get("record").getAsBoolean());
-        JsonObject on = PathConfigs.desired("x", cam(RecordMode.TAG, 0, ""), null, SERVER, true).get("cam/x");
+        assertFalse(PathConfigs.desired("x", cam(RecordMode.TAG, 0, ""), null, SERVER, false, null).get("cam/x").get("record").getAsBoolean());
+        JsonObject on = PathConfigs.desired("x", cam(RecordMode.TAG, 0, ""), null, SERVER, true, null).get("cam/x");
         assertTrue(on.get("record").getAsBoolean());
         assertEquals("720h", on.get("recordDeleteAfter").getAsString());
     }
 
     @Test
     void offNeverRecords() {
-        assertFalse(PathConfigs.desired("x", cam(RecordMode.OFF, 10, ""), null, SERVER, true).get("cam/x").get("record").getAsBoolean());
+        assertFalse(PathConfigs.desired("x", cam(RecordMode.OFF, 10, ""), null, SERVER, true, null).get("cam/x").get("record").getAsBoolean());
     }
 
     @Test
@@ -114,5 +114,43 @@ class PathConfigsTest {
         assertFalse(PathConfigs.matches(want, have));
         assertNull(PathConfigs.durationNanos(new com.inductiveautomation.ignition.common.gson.JsonPrimitive("tcp")));
         assertEquals(5_400_000_000_000L, PathConfigs.durationNanos(new com.inductiveautomation.ignition.common.gson.JsonPrimitive("1h30m")));
+    }
+
+    @Test
+    void transcodePathsPerProfileAndSource() {
+        Map<String, JsonObject> d = PathConfigs.desired("front", cam(RecordMode.CONTINUOUS, 10, "rtsp://192.0.2.5/sub"), null,
+            SERVER, false, "transcoder:tok");
+        assertEquals(List.of("cam/front", "cam/front/sub", "cam/front/tx/1080p", "cam/front/sub/tx/1080p",
+            "cam/front/tx/720p", "cam/front/sub/tx/720p", "cam/front/tx/480p", "cam/front/sub/tx/480p"), List.copyOf(d.keySet()));
+        JsonObject tx = d.get("cam/front/sub/tx/720p");
+        assertEquals("publisher", tx.get("source").getAsString());
+        assertEquals("10s", tx.get("runOnDemandCloseAfter").getAsString());
+        String cmd = tx.get("runOnDemand").getAsString();
+        assertTrue(cmd.startsWith("ffmpeg "), cmd);
+        assertTrue(cmd.contains(" -i rtsp://transcoder:tok@127.0.0.1:$RTSP_PORT/cam/front/sub "), cmd);
+        assertTrue(cmd.contains(" -vf 'scale=-2:'\"'\"'min(720,ih)'\"'\"',format=yuv420p' "), cmd);
+        assertTrue(cmd.endsWith(" rtsp://transcoder:tok@127.0.0.1:$RTSP_PORT/$MTX_PATH"), cmd);
+        assertEquals("/recordings/%path/%Y-%m-%d_%H-%M-%S-%f", d.get("cam/front").get("recordPath").getAsString());
+    }
+
+    @Test
+    void noTranscodePathsWhenDisabled() {
+        MediaServerConfig off = new MediaServerConfig(SERVER.apiUrl(), SERVER.playbackUrl(), SERVER.publicUrl(), "", null, null, "",
+            15, 10, "/data/rec/", false, 2, null, null, null, null, null, null);
+        Map<String, JsonObject> d = PathConfigs.desired("front", cam(RecordMode.CONTINUOUS, 10, ""), null, off, false, "t:t");
+        assertEquals(List.of("cam/front"), List.copyOf(d.keySet()));
+        assertEquals("/data/rec/%path/%Y-%m-%d_%H-%M-%S-%f", d.get("cam/front").get("recordPath").getAsString());
+    }
+
+    @Test
+    void cameraOfEveryManagedPath() {
+        assertEquals("front", PathConfigs.cameraOf("cam/front"));
+        assertEquals("front", PathConfigs.cameraOf("cam/front/sub"));
+        assertEquals("front", PathConfigs.cameraOf("cam/front/tx/720p"));
+        assertEquals("f.r-1", PathConfigs.cameraOf("cam/f.r-1/sub/tx/480p"));
+        assertNull(PathConfigs.cameraOf("cam/front/other"));
+        assertNull(PathConfigs.cameraOf("live/front"));
+        assertTrue(PathConfigs.isTranscode("cam/front/sub/tx/480p"));
+        assertFalse(PathConfigs.isTranscode("cam/front/sub"));
     }
 }

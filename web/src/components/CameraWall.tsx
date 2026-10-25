@@ -118,14 +118,20 @@ function Tile(props: TileProps) {
     const visible = useVisible(ref);
     const [state, setState] = React.useState<{ s: LiveState; detail?: string }>({ s: "idle" });
     const quality: "main" | "sub" = maximised ? "main" : "sub";
+    const [transcoded, setTranscoded] = React.useState<string | null>(null);
     const resolveUrl = React.useMemo(
-        () => (batcher && tile.camera ? () => batcher.url(tile.camera, quality) : null),
+        () => (batcher && tile.camera ? async () => {
+            const s = await batcher.url(tile.camera, quality);
+            setTranscoded(s.transcoded);
+            return s.url;
+        } : null),
         [batcher, tile.camera, quality]
     );
-    const windowUrl = React.useCallback(
-        (start: number, dur: number) => playbackWindow(delegate!, tile.camera, start, dur),
-        [delegate, tile.camera]
-    );
+    const windowUrl = React.useCallback(async (start: number, dur: number) => {
+        const w = await playbackWindow(delegate!, tile.camera, start, dur);
+        setTranscoded(w.transcoded ?? null);
+        return w;
+    }, [delegate, tile.camera]);
     const paused = !visible || !props.pageVisible || !props.allowedLive;
     const detail = !props.allowedLive ? "paused: stream limit" : !visible ? "off screen" : state.detail;
 
@@ -147,7 +153,7 @@ function Tile(props: TileProps) {
             )}
             {props.showStatus && (
                 <StatusBadge camera={tile.label || tile.camera} state={paused && live ? "idle" : state.s}
-                    detail={detail} extra={live && state.s === "live" ? (quality === "main" ? "HD" : undefined) : undefined} />
+                    detail={detail} extra={state.s === "live" ? (transcoded ?? (live && quality === "main" ? "HD" : undefined)) : undefined} />
             )}
         </div>
     );

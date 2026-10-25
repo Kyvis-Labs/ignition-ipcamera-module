@@ -26,6 +26,9 @@ import com.kyvislabs.camera.gateway.events.CameraEvent;
 import com.kyvislabs.camera.gateway.mediamtx.MediaMtxClient;
 import com.kyvislabs.camera.gateway.mediamtx.Timeline;
 import com.kyvislabs.camera.gateway.mediamtx.PathConfigs;
+import com.kyvislabs.camera.gateway.config.TranscodeProfile;
+import com.kyvislabs.camera.gateway.transcode.TranscodeRoute;
+import com.kyvislabs.camera.gateway.transcode.TranscodeService;
 
 /**
  * Gateway half of the camera components. The browser never learns anything it could use for
@@ -85,17 +88,23 @@ public class CameraComponentDelegate extends ComponentModelDelegate {
     }
 
     /**
-     * {@code {cameras: [{camera, quality: "main"|"sub"}]}} -> {@code {streams: {camera: {whep,
-     * quality, error?}}}}. One round trip for a whole camera wall.
+     * {@code {cameras: [{camera, quality, maxHeight?}], accept?: [codec...]}} -> {@code {streams:
+     * {camera: {whep, quality, codecs, transcoded?, error?}}}}. One round trip for a whole wall.
+     *
+     * <p>{@code quality} is {@code main}, {@code sub} or a transcode profile name. {@code accept}
+     * lists the video codecs the browser decodes over WebRTC; a stream in any other codec is
+     * transcoded to a profile sized to {@code maxHeight} (the viewer's height in device pixels).
      */
     private void live(JsonObject req, JsonObject res) {
         JsonObject streams = new JsonObject();
         Collection<String> roles = roles();
         String user = user().map(WebAuthUser::getUserName).orElse("");
+        Set<String> accept = accept(req);
         for (JsonElement el : requested(req)) {
             JsonObject item = el.getAsJsonObject();
             String camera = item.get("camera").getAsString();
             String quality = item.has("quality") ? item.get("quality").getAsString() : "main";
+            int maxHeight = item.has("maxHeight") ? item.get("maxHeight").getAsInt() : 0;
             JsonObject out = new JsonObject();
             Optional<CameraConfig> cfg = services.manager().camera(camera);
             if (cfg.isEmpty()) {
@@ -103,16 +112,31 @@ public class CameraComponentDelegate extends ComponentModelDelegate {
             } else if (!CameraAccess.canView(cfg.get(), roles)) {
                 out.addProperty("error", "not permitted");
             } else {
-                boolean sub = "sub".equals(quality) && cfg.get().hasSubstream();
-                String path = sub ? PathConfigs.subPath(camera) : PathConfigs.mainPath(camera);
-                String token = services.tokens().mint(Set.of(path), Set.of(TokenService.Action.READ), LIVE_TTL, user);
-                out.addProperty("whep", services.manager().server().publicUrl() + "/" + path + "/whep?token=" + token);
-                out.addProperty("quality", sub ? "sub" : "main");
-                out.addProperty("codecs", CameraManager.codecs(services.manager().runtime(path)));
+                TranscodeService.Choice c = services.transcoder().live(camera, cfg.get(), quality, accept, maxHeight);
+                if (c.error() != null) {
+                    out.addProperty("error", c.error());
+                } else {
+                    String token = services.tokens().mint(Set.of(c.path()), Set.of(TokenService.Action.READ), LIVE_TTL, user);
+                    out.addProperty("whep", services.manager().server().publicUrl() + "/" + c.path() + "/whep?token=" + token);
+                    out.addProperty("quality", c.path().endsWith("/sub") ? "sub" : c.profile() != null ? c.profile() : "main");
+                    out.addProperty("codecs", c.profile() != null ? "H264, Opus" : CameraManager.codecs(services.manager().runtime(c.path())));
+                    if (c.profile() != null) {
+                        out.addProperty("transcoded", c.profile());
+                    }
+                }
             }
             streams.add(camera, out);
         }
         res.add("streams", streams);
+    }
+
+    /** The video codecs the client says it decodes; empty when it did not say. */
+    private static Set<String> accept(JsonObject req) {
+        Set<String> out = new java.util.HashSet<>();
+        if (req.has("accept") && req.get("accept").isJsonArray()) {
+            req.getAsJsonArray("accept").forEach(e -> out.add(e.getAsString()));
+        }
+        return out;
     }
 
     /**
@@ -161,13 +185,21 @@ public class CameraComponentDelegate extends ComponentModelDelegate {
     }
 
     /**
-     * {@code {cameras: [name...], start (ms), duration (s)}} -> {@code {streams: {camera: {url}}}}.
+     * {@code {cameras: [name...], start (ms), duration (s), quality?, maxHeight?, accept?}} ->
+     * {@code {streams: {camera: {url, start, duration, codecs, transcoded?}}}}.
      * The URL is a self-contained MP4 of that window; MediaMTX's playback server does not do
      * range requests, so the client seeks by asking for a new window, not within one.
+     *
+     * <p>{@code accept} lists the codecs the browser plays in a {@code <video>}; a recording in
+     * any other codec, or a {@code quality} naming a profile, is served by the gateway's
+     * transcoder instead, in windows of at most {@link TranscodeRoute#MAX_WINDOW_SEC}.
      */
     private void playback(JsonObject req, JsonObject res) {
         long startMs = req.get("start").getAsLong();
         double duration = Math.min(req.get("duration").getAsDouble(), MAX_WINDOW_SEC);
+        String quality = req.has("quality") ? req.get("quality").getAsString() : "main";
+        int maxHeight = req.has("maxHeight") ? req.get("maxHeight").getAsInt() : 0;
+        Set<String> accept = accept(req);
         Collection<String> roles = roles();
         String user = user().map(WebAuthUser::getUserName).orElse("");
         JsonObject out = new JsonObject();
@@ -185,6 +217,7 @@ public class CameraComponentDelegate extends ComponentModelDelegate {
                     PLAYBACK_TTL, user);
                 s.addProperty("codecs", CameraManager.codecs(services.manager().runtime(path)));
                 CameraEvent clip = clipCovering(camera, startMs);
+                TranscodeProfile tx = clip == null ? services.transcoder().forPlayback(camera, quality, accept, maxHeight) : null;
                 if (clip != null) {
                     // MediaMTX no longer has this (buffer expired); serve the exported clip, which
                     // starts at the clip part's start rather than the requested time
@@ -193,6 +226,14 @@ public class CameraComponentDelegate extends ComponentModelDelegate {
                         + "&file=" + URLEncoder.encode(part.file(), StandardCharsets.UTF_8) + "&token=" + token);
                     s.addProperty("start", part.startMs());
                     s.addProperty("duration", (part.endMs() - part.startMs()) / 1000.0);
+                } else if (tx != null) {
+                    double d = Math.min(duration, TranscodeRoute.MAX_WINDOW_SEC);
+                    s.addProperty("url", "/data/camera/transcode?camera=" + camera + "&start=" + startMs + "&duration=" + d
+                        + "&profile=" + URLEncoder.encode(tx.name(), StandardCharsets.UTF_8) + "&token=" + token);
+                    s.addProperty("start", startMs);
+                    s.addProperty("duration", d);
+                    s.addProperty("transcoded", tx.name());
+                    s.addProperty("codecs", "H264, MPEG-4 Audio");
                 } else {
                     s.addProperty("url", services.manager().server().publicUrl() + "/get?path=" + path
                         + "&start=" + URLEncoder.encode(Instant.ofEpochMilli(startMs).toString(), StandardCharsets.UTF_8)

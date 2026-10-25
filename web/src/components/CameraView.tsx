@@ -17,7 +17,8 @@ import { Controls, ZOOMS } from "./Controls";
 
 export const COMPONENT_TYPE = "kyvislabs.camera.view";
 
-type Quality = "auto" | "main" | "sub";
+/** "auto", "main", "sub", or a transcode profile configured on the gateway (e.g. "720p"). */
+type Quality = string;
 type Mode = "live" | "playback";
 
 interface CameraViewProps {
@@ -42,6 +43,8 @@ export function CameraView(props: ComponentProps<CameraViewProps>) {
     const { camera } = p;
     const delegate = props.store.delegate as CameraDelegate | undefined;
     const [width, setWidth] = React.useState(0);
+    // read when a stream is resolved, not a dependency: resizing must not reconnect
+    const heightPx = React.useRef(0);
     const [liveState, setLiveState] = React.useState<{ s: LiveState; detail?: string }>({ s: "idle" });
     const [pbState, setPbState] = React.useState<{ s: string; detail?: string }>({ s: "loading" });
 
@@ -60,7 +63,10 @@ export function CameraView(props: ComponentProps<CameraViewProps>) {
         if (!el || typeof ResizeObserver === "undefined") {
             return;
         }
-        const ro = new ResizeObserver(entries => setWidth(entries[0].contentRect.width));
+        const ro = new ResizeObserver(entries => {
+            setWidth(entries[0].contentRect.width);
+            heightPx.current = Math.round(entries[0].contentRect.height * (window.devicePixelRatio || 1));
+        });
         ro.observe(el);
         return () => ro.disconnect();
     }, [props.store.element]);
@@ -116,15 +122,23 @@ export function CameraView(props: ComponentProps<CameraViewProps>) {
         t: m.t, end: m.end, label: m.label || (m.kind === "event" ? "event" : "bookmark"), kind: m.kind,
     })), [timeline, camera]);
 
-    const effective: "main" | "sub" = p.quality === "auto" ? (width > 0 && width <= SUB_MAX_WIDTH ? "sub" : "main") : p.quality;
+    const quality = p.quality || "auto";
+    const effective = quality === "auto" ? (width > 0 && width <= SUB_MAX_WIDTH ? "sub" : "main") : quality;
+    // the transcode profile of what is showing (live or playback), for the badge
+    const [transcoded, setTranscoded] = React.useState<string | null>(null);
     const resolveUrl = React.useMemo(
-        () => (camera && delegate ? () => liveUrl(delegate, camera, effective) : null),
+        () => (camera && delegate ? async () => {
+            const s = await liveUrl(delegate, camera, effective, heightPx.current);
+            setTranscoded(s.transcoded);
+            return s.url;
+        } : null),
         [camera, delegate, effective]
     );
-    const windowUrl = React.useCallback(
-        (start: number, dur: number) => playbackWindow(delegate!, camera, start, dur),
-        [delegate, camera]
-    );
+    const windowUrl = React.useCallback(async (start: number, dur: number) => {
+        const w = await playbackWindow(delegate!, camera, start, dur, quality, heightPx.current);
+        setTranscoded(w.transcoded ?? null);
+        return w;
+    }, [delegate, camera, quality]);
     const bookmark = async () => {
         if (!delegate || !camera) {
             return;
@@ -177,7 +191,8 @@ export function CameraView(props: ComponentProps<CameraViewProps>) {
                 )}
                 {p.showStatus && (
                     <StatusBadge camera={camera} state={badgeState} detail={badgeDetail}
-                        extra={live ? (liveState.s === "live" ? "LIVE" : undefined) : shown ? new Date(shown).toLocaleString() : undefined} />
+                        extra={[live ? (liveState.s === "live" ? "LIVE" : undefined) : shown ? new Date(shown).toLocaleString() : undefined,
+                            transcoded ?? undefined].filter(Boolean).join(" · ") || undefined} />
                 )}
             </div>
             {p.showControls && (

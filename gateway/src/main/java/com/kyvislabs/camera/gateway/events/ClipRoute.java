@@ -62,7 +62,7 @@ public final class ClipRoute {
         return digits.length() <= 18;
     }
 
-    static void serve(Path file, String range, HttpServletResponse res) throws Exception {
+    public static void serve(Path file, String range, HttpServletResponse res) throws Exception {
         long size = Files.size(file);
         long start = 0;
         long end = size - 1;

@@ -1,7 +1,7 @@
 import * as React from "react";
 import { useFormContext } from "react-hook-form";
 import {
-    Alert, AlertStates, Button, ButtonColorClasses, CircularProgress, ColumnDef, FormLabel, InfoTooltipCell, RadioCard,
+    Alert, AlertStates, Button, ButtonColorClasses, CircularProgress, ColumnDef, FormLabel, InfoTooltipCell, PageHeader, RadioCard,
     StatusBadge, TextInput, TooltipSize,
 } from "@inductiveautomation/ignition-web-ui";
 import { Content, ResourceModeDataGrid } from "@inductiveautomation/ignition-gateway-lib";
@@ -78,7 +78,7 @@ interface Discovery {
 
 const NO_DISCOVERY: Discovery = { busy: false, cidr: "", found: null, error: null, choice: "manual" };
 
-/** Connections → Cameras → Cameras: the gateway's resource grid, plus live status and ONVIF discovery. */
+/** Connections → Cameras → Connections: the gateway's resource grid, plus live status and ONVIF discovery. */
 export function CamerasPage() {
     const [status, setStatus] = React.useState<Record<string, CameraStatus>>({});
     const [discovery, setDiscovery] = React.useState<Discovery>(NO_DISCOVERY);
@@ -111,24 +111,27 @@ export function CamerasPage() {
     ], [discovery]);
 
     return (
-        <Content>
-            <ResourceModeDataGrid
-                resourceType={CAMERA_TYPE}
-                itemName="Camera"
-                columnDefs={COLUMNS}
-                CreateForm={CameraForm}
-                createSteps={createSteps}
-                onClose={kind => kind === "create" && setDiscovery(NO_DISCOVERY)}
-                formDefaults={CAMERA_DEFAULTS}
-                transformData={transformData}
-                rename={false}
-                blankStateConfig={{
-                    label: "No Cameras Configured",
-                    content: "Add an IP camera by its RTSP stream URLs, or pick one that answers ONVIF discovery.",
-                    primaryLabel: "Create Camera",
-                }}
-            />
-        </Content>
+        <>
+            <PageHeader pageTitle="Camera Connections" />
+            <Content>
+                <ResourceModeDataGrid
+                    resourceType={CAMERA_TYPE}
+                    itemName="Camera"
+                    columnDefs={COLUMNS}
+                    CreateForm={CameraForm}
+                    createSteps={createSteps}
+                    onClose={kind => kind === "create" && setDiscovery(NO_DISCOVERY)}
+                    formDefaults={CAMERA_DEFAULTS}
+                    transformData={transformData}
+                    rename={false}
+                    blankStateConfig={{
+                        label: "No Cameras Configured",
+                        content: "Add an IP camera by its RTSP stream URLs, or pick one that answers ONVIF discovery.",
+                        primaryLabel: "Create Camera",
+                    }}
+                />
+            </Content>
+        </>
     );
 }
 

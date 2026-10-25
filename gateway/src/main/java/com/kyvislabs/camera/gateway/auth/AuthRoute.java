@@ -1,5 +1,7 @@
 package com.kyvislabs.camera.gateway.auth;
 
+import com.kyvislabs.camera.gateway.mediamtx.PathConfigs;
+
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -32,7 +34,12 @@ public final class AuthRoute {
     private AuthRoute() {
     }
 
-    public static void mount(RouteGroup routes, TokenService tokens, Supplier<String> callbackKey) {
+    /**
+     * @param admitTranscode asked before a reader joins a transcode path: whether the transcode
+     *                       limit allows it (an already-running transcode always admits)
+     */
+    public static void mount(RouteGroup routes, TokenService tokens, Supplier<String> callbackKey,
+                             java.util.function.Predicate<String> admitTranscode) {
         routes.newRoute("/auth")
             .method(HttpMethod.POST)
             .accessControl(AccessControlStrategy.OPEN_ROUTE)
@@ -43,34 +50,54 @@ public final class AuthRoute {
                     res.setStatus(HttpServletResponse.SC_FORBIDDEN);
                     return "";
                 }
-                res.setStatus(decide(req, tokens) ? HttpServletResponse.SC_OK : HttpServletResponse.SC_UNAUTHORIZED);
+                res.setStatus(decide(req, tokens, admitTranscode) ? HttpServletResponse.SC_OK : HttpServletResponse.SC_UNAUTHORIZED);
                 return "";
             })
             .mount();
     }
 
-    static boolean decide(RequestContext req, TokenService tokens) throws Exception {
+    static boolean decide(RequestContext req, TokenService tokens, java.util.function.Predicate<String> admitTranscode) throws Exception {
         JsonObject body = JsonParser.parseString(req.readBody()).getAsJsonObject();
+        return decide(body, tokens, admitTranscode);
+    }
+
+    static boolean decide(JsonObject body, TokenService tokens, java.util.function.Predicate<String> admitTranscode) {
         String action = str(body, "action");
         String path = str(body, "path");
         TokenService.Action a = switch (action) {
             case "read" -> TokenService.Action.READ;
             case "playback" -> TokenService.Action.PLAYBACK;
+            case "publish" -> TokenService.Action.PUBLISH;
             default -> null;
         };
         if (a == null) {
-            // publish/api/metrics/pprof: never granted to browsers.
+            // api/metrics/pprof: never granted.
             return false;
         }
         for (String candidate : new String[]{str(body, "token"), str(body, "password"), queryToken(str(body, "query"))}) {
-            if (tokens.allows(candidate, path, a)) {
-                return true;
+            if (!tokens.allows(candidate, path, a)) {
+                continue;
             }
+            boolean transcoder = TokenService.TRANSCODER.equals(tokens.grant(candidate).user());
+            if (transcoder) {
+                // the transcoder's ffmpeg runs inside the MediaMTX container: it may read any
+                // camera and publish only transcodes, and only from there
+                return loopback(str(body, "ip")) && (a != TokenService.Action.PUBLISH || PathConfigs.isTranscode(path));
+            }
+            if (a == TokenService.Action.READ && PathConfigs.isTranscode(path) && !admitTranscode.test(path)) {
+                log.infof("Transcode %s refused: the transcode limit is reached", path);
+                return false;
+            }
+            return true;
         }
         if (log.isDebugEnabled()) {
             log.debugf("denied %s %s from %s", action, path, str(body, "ip"));
         }
         return false;
+    }
+
+    private static boolean loopback(String ip) {
+        return "127.0.0.1".equals(ip) || "::1".equals(ip);
     }
 
     static String queryToken(String query) {

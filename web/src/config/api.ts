@@ -73,6 +73,7 @@ export interface ProbeResult {
 
 export const api = {
     status: () => req<{ cameras: Record<string, CameraStatus> }>("GET", "/data/camera/status").then(r => r.cameras),
+    transcodes: () => req<{ transcodes: { active: number; max: number } }>("GET", "/data/camera/status").then(r => r.transcodes),
     discover: (cidr?: string) => req<DiscoveredDevice[]>("POST", "/data/camera/onvif/discover", cidr ? { cidr } : {}),
     /** With {@code camera} and no password, the gateway uses that camera's stored credentials. */
     probe: (url: string, username: string, password: string, camera?: string) =>

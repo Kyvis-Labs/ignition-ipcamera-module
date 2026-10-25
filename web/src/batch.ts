@@ -1,11 +1,13 @@
-import { CameraDelegate } from "./delegate";
+import { webrtcCodecs } from "./codecs";
+import { CameraDelegate, lastCodecs, LiveStream } from "./delegate";
 
-type Quality = "main" | "sub";
+/** "main", "sub" or a transcode profile name. */
+type Quality = string;
 
 interface Pending {
     camera: string;
     quality: Quality;
-    resolve: (url: string) => void;
+    resolve: (stream: LiveStream) => void;
     reject: (e: Error) => void;
 }
 
@@ -21,7 +23,7 @@ export class LiveBatcher {
     constructor(private delegate: CameraDelegate, private windowMs = 15) {
     }
 
-    url(camera: string, quality: Quality): Promise<string> {
+    url(camera: string, quality: Quality): Promise<LiveStream> {
         return new Promise((resolve, reject) => {
             this.queue.push({ camera, quality, resolve, reject });
             if (!this.timer) {
@@ -54,10 +56,15 @@ export class LiveBatcher {
             try {
                 const res = await this.delegate.request("live", {
                     cameras: group.map(([, ps]) => ({ camera: ps[0].camera, quality: ps[0].quality })),
+                    accept: webrtcCodecs(),
                 });
                 for (const [, ps] of group) {
                     const s = res.streams?.[ps[0].camera];
-                    ps.forEach(p => (s && !s.error ? p.resolve(s.whep) : p.reject(new Error(s?.error ?? "no stream"))));
+                    if (s && !s.error) {
+                        lastCodecs.set(ps[0].camera, s.codecs ?? "");
+                    }
+                    ps.forEach(p => (s && !s.error ? p.resolve({ url: s.whep, transcoded: s.transcoded ?? null })
+                        : p.reject(new Error(s?.error ?? "no stream"))));
                 }
             } catch (e) {
                 group.forEach(([, ps]) => ps.forEach(p => p.reject(e as Error)));

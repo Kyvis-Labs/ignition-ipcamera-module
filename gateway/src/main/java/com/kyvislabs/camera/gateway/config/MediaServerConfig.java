@@ -1,5 +1,7 @@
 package com.kyvislabs.camera.gateway.config;
 
+import java.util.List;
+
 import com.inductiveautomation.ignition.common.resourcecollection.ResourceType;
 import com.inductiveautomation.ignition.gateway.config.ResourceTypeMeta;
 import com.inductiveautomation.ignition.gateway.dataroutes.openapi.annotations.DefaultValue;
@@ -36,8 +38,8 @@ public record MediaServerConfig(
         + "(authHTTPAddress: http://<gateway>:8088/data/camera/auth?key=<this>).")
     SecretConfig authCallbackKey,
 
-    @Description("Folder for event clips, bookmarks and exports. Blank = <gateway data>/camera. "
-        + "Read at module startup.")
+    @Description("Folder on the gateway for event clips, bookmarks, exports and the transcode cache. "
+        + "Blank = <gateway data>/camera. Read at module startup.")
     String storagePath,
 
     @Description("Seconds between reconciliations of camera paths against MediaMTX.")
@@ -46,12 +48,55 @@ public record MediaServerConfig(
 
     @Description("Length of each recording segment file, in minutes.")
     @DefaultValue("10")
-    Integer segmentMinutes
+    Integer segmentMinutes,
+
+    @Description("Folder recordings are written to, as MediaMTX sees it (inside its container). "
+        + "Changing it hides existing recordings from playback until they are moved.")
+    @DefaultValue("/recordings")
+    String recordingsPath,
+
+    @Description("Allow transcoding to H.264 for browsers that cannot decode a camera's codec, and "
+        + "to the lower-resolution profiles below.")
+    @DefaultValue("true")
+    Boolean transcodeEnabled,
+
+    @Description("Transcodes allowed at once, live and recordings together. Viewers of the same "
+        + "camera and profile share one live transcode.")
+    @DefaultValue("2")
+    Integer maxTranscodes,
+
+    @Description("Encoder: SOFTWARE (CPU), VAAPI (Intel/AMD GPU), QSV (Intel Quick Sync) or NVENC (NVIDIA).")
+    @DefaultValue("SOFTWARE")
+    TranscodeEncoder transcodeEncoder,
+
+    @Description("GPU device for VAAPI and QSV, as seen inside the containers that run ffmpeg.")
+    @DefaultValue("/dev/dri/renderD128")
+    String transcodeDevice,
+
+    @Description("SOFTWARE only: x264 preset. Faster presets use less CPU for a larger stream.")
+    @DefaultValue("veryfast")
+    String transcodePreset,
+
+    @Description("Seconds a live transcode keeps running after its last viewer leaves.")
+    @DefaultValue("10")
+    Integer transcodeIdleSec,
+
+    @Description("Output profiles: name, height and bitrate.")
+    List<TranscodeProfile> transcodeProfiles,
+
+    @Description("ffmpeg on the gateway, used to transcode recordings for playback.")
+    @DefaultValue("ffmpeg")
+    String ffmpegPath
 ) {
     public static final ResourceType TYPE = new ResourceType(CameraModule.MODULE_ID, "media-server");
 
     public static final MediaServerConfig DEFAULT = new MediaServerConfig(
-        "http://mediamtx:9997", "http://mediamtx:9996", "https://cams.example.com", "", null, null, "", 15, 10);
+        "http://mediamtx:9997", "http://mediamtx:9996", "https://cams.example.com", "", null, null, "", 15, 10,
+        "/recordings", true, 2, TranscodeEncoder.SOFTWARE, "/dev/dri/renderD128", "veryfast", 10,
+        TranscodeProfile.DEFAULTS, "ffmpeg");
+
+    public static final List<String> PRESETS = List.of(
+        "ultrafast", "superfast", "veryfast", "faster", "fast", "medium");
 
     public MediaServerConfig {
         apiUrl = stripSlash(apiUrl == null ? DEFAULT_API : apiUrl);
@@ -60,6 +105,19 @@ public record MediaServerConfig(
         storagePath = storagePath == null ? "" : storagePath.trim();
         reconcileIntervalSec = reconcileIntervalSec == null ? 15 : Math.max(2, reconcileIntervalSec);
         segmentMinutes = segmentMinutes == null ? 10 : Math.max(1, segmentMinutes);
+        recordingsPath = recordingsPath == null || recordingsPath.isBlank() ? "/recordings" : stripSlash(recordingsPath.trim());
+        transcodeEnabled = transcodeEnabled == null || transcodeEnabled;
+        maxTranscodes = maxTranscodes == null ? 2 : Math.max(0, maxTranscodes);
+        transcodeEncoder = transcodeEncoder == null ? TranscodeEncoder.SOFTWARE : transcodeEncoder;
+        transcodeDevice = transcodeDevice == null || transcodeDevice.isBlank() ? "/dev/dri/renderD128" : transcodeDevice.trim();
+        transcodePreset = transcodePreset == null || transcodePreset.isBlank() ? "veryfast" : transcodePreset.trim();
+        transcodeIdleSec = transcodeIdleSec == null ? 10 : Math.max(1, transcodeIdleSec);
+        transcodeProfiles = transcodeProfiles == null ? TranscodeProfile.DEFAULTS : List.copyOf(transcodeProfiles);
+        ffmpegPath = ffmpegPath == null || ffmpegPath.isBlank() ? "ffmpeg" : ffmpegPath.trim();
+    }
+
+    public java.util.Optional<TranscodeProfile> profile(String name) {
+        return transcodeProfiles.stream().filter(p -> p.name().equals(name)).findFirst();
     }
 
     private static final String DEFAULT_API = "http://mediamtx:9997";
@@ -80,6 +138,19 @@ public record MediaServerConfig(
             v.requireNotEmpty("apiUrl", c.apiUrl());
             v.requireNotEmpty("playbackUrl", c.playbackUrl());
             v.requireNotEmpty("publicUrl", c.publicUrl());
+            v.checkField(c.recordingsPath().startsWith("/"), "recordingsPath", "recordingsPath must be an absolute path");
+            v.checkField(PRESETS.contains(c.transcodePreset()), "transcodePreset",
+                "transcodePreset must be one of " + String.join(", ", PRESETS));
+            java.util.Set<String> names = new java.util.HashSet<>();
+            for (TranscodeProfile p : c.transcodeProfiles()) {
+                v.checkField(p.name() != null && TranscodeProfile.NAME.matcher(p.name()).matches(), "transcodeProfiles",
+                    "profile names may only use letters, digits, '_' and '-'");
+                v.checkField(names.add(String.valueOf(p.name())), "transcodeProfiles", "duplicate profile name " + p.name());
+                v.checkField(p.height() != null && p.height() >= 120 && p.height() <= 4320, "transcodeProfiles",
+                    "profile height must be 120-4320");
+                v.checkField(p.bitrateKbps() != null && p.bitrateKbps() >= 100 && p.bitrateKbps() <= 50_000, "transcodeProfiles",
+                    "profile bitrate must be 100-50000 kbit/s");
+            }
         })
         .build();
 }

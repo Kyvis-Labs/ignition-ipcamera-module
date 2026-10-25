@@ -64,6 +64,12 @@ public class CameraManager {
         this.events = events;
     }
 
+    private volatile com.kyvislabs.camera.gateway.transcode.TranscodeService transcoder;
+
+    public void setTranscoder(com.kyvislabs.camera.gateway.transcode.TranscodeService transcoder) {
+        this.transcoder = transcoder;
+    }
+
     public CameraManager(GatewayContext context, StatusTags tags, TokenService tokens) {
         this.context = context;
         this.tags = tags;
@@ -163,6 +169,9 @@ public class CameraManager {
             if (events != null) {
                 events.tick();
             }
+            if (transcoder != null) {
+                transcoder.purgeCache();
+            }
             reconcile();
         } catch (Throwable t) {
             log.error("Reconcile pass failed", t);
@@ -178,11 +187,12 @@ public class CameraManager {
 
         Map<String, JsonObject> desired = new LinkedHashMap<>();
         Map<String, String> pathOwner = new HashMap<>();
+        String transcoderAuth = server.transcodeEnabled() ? TokenService.TRANSCODER + ":" + tokens.transcoderToken() : null;
         for (Map.Entry<String, CameraConfig> e : cams.entrySet()) {
             String name = e.getKey();
             CameraConfig cfg = e.getValue();
             String pw = reveal(cfg.password(), "password for camera '" + name + "'");
-            PathConfigs.desired(name, cfg, pw, server, recordingNow.contains(name)).forEach((p, conf) -> {
+            PathConfigs.desired(name, cfg, pw, server, recordingNow.contains(name), transcoderAuth).forEach((p, conf) -> {
                 desired.put(p, conf);
                 pathOwner.put(p, name);
             });
