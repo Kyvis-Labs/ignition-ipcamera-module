@@ -66,7 +66,7 @@ An event starts `preRollSec` before the first trigger and ends `postRollSec` aft
 
 **TAG conditions:** `true`, `false`, `> n`, `>= n`, `< n`, `<= n`, `= v`, `!= v`. Blank means truthy.
 
-**EVENT types:** Text matched against the camera's ONVIF topics and data, such as `motion`, `person` or `vehicle`. Blank means motion.
+**EVENT types:** Text matched against the camera's ONVIF topics and data, such as `motion`, `person` or `vehicle`. Blank means motion. `Detect from Camera` lists what the camera offers.
 
 Tag driven bookmarks work in any record mode.
 

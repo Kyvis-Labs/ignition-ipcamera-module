@@ -43,6 +43,7 @@ public class OnvifEventSubscriber implements AutoCloseable {
     private volatile String pullPoint;
     /** key -> label of detectors currently on */
     private final Map<String, String> on = new HashMap<>();
+    private volatile java.util.function.BiConsumer<String, Boolean> seen = (topic, stateful) -> { };
 
     public OnvifEventSubscriber(String camera, OnvifClient client, List<String> types, Sink sink, Status status) {
         this.camera = camera;
@@ -52,6 +53,16 @@ public class OnvifEventSubscriber implements AutoCloseable {
         this.status = status;
         this.thread = new Thread(this::run, "camera-onvif-" + camera);
         this.thread.setDaemon(true);
+    }
+
+    /**
+     * Told the topic (prefix stripped) and whether it carried an on/off state, for every
+     * notification received, matching or not. Cameras do not always list every topic they
+     * send in GetEventProperties (Reolink's person/vehicle detection, for one), so what
+     * actually arrives is the other half of "which event types does this camera have".
+     */
+    public void onSeen(java.util.function.BiConsumer<String, Boolean> seen) {
+        this.seen = seen;
     }
 
     public void start() {
@@ -102,6 +113,9 @@ public class OnvifEventSubscriber implements AutoCloseable {
 
     void handle(OnvifEvent e) {
         Boolean active = e.active();
+        if (!e.topic().isEmpty()) {
+            seen.accept(shortTopic(e.topic()), active != null);
+        }
         if (active == null || !e.matches(types)) {
             return;
         }

@@ -16,7 +16,7 @@ import org.w3c.dom.Element;
  */
 public record OnvifEvent(String topic, String operation, Map<String, String> source, Map<String, String> data) {
     /** Data item names vendors use for the on/off state of a detector. */
-    private static final Set<String> STATE_ITEMS = Set.of(
+    static final Set<String> STATE_ITEMS = Set.of(
         "ismotion", "state", "value", "isinside", "triggered", "logicalstate", "active", "alarm");
 
     static List<OnvifEvent> parse(Document d) {

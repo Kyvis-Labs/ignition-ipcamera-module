@@ -73,6 +73,8 @@ public class EventService {
     /** ONVIF subscribers for EVENT-mode cameras, keyed by camera, with the settings they were built from. */
     private final Map<String, OnvifEventSubscriber> onvif = new HashMap<>();
     private final Map<String, String> onvifSignature = new HashMap<>();
+    /** camera -> topic -> carried an on/off state; what each camera's subscription has received (memory only). */
+    private final Map<String, Map<String, Boolean>> seenTopics = new ConcurrentHashMap<>();
     private volatile long lastRetention;
 
     private record Subscription(TagPath path, TagChangeListener listener) {
@@ -196,6 +198,8 @@ public class EventService {
                     hooks.reveal(cfg.password(), "password for camera '" + camera + "'"));
                 OnvifEventSubscriber sub = new OnvifEventSubscriber(camera, client, cfg.eventTypes(),
                     (cam, key, label, on) -> cameraEvent(cam, key, label, on), hooks::eventSourceHealth);
+                sub.onSeen((topic, stateful) -> seenTopics.computeIfAbsent(camera, k -> new java.util.concurrent.ConcurrentSkipListMap<>())
+                    .merge(topic, stateful, Boolean::logicalOr));
                 onvif.put(camera, sub);
                 onvifSignature.put(camera, signature(cfg));
                 sub.start();
@@ -501,6 +505,14 @@ public class EventService {
     }
 
     /** Snapshot of controller state, for status. */
+    /**
+     * Event topics this camera's ONVIF subscription has received since the gateway started,
+     * each with whether it carried an on/off state. Only EVENT-mode ONVIF cameras subscribe.
+     */
+    public Map<String, Boolean> seenTopics(String camera) {
+        return Map.copyOf(seenTopics.getOrDefault(camera, Map.of()));
+    }
+
     public Map<String, Boolean> recordingStates() {
         Map<String, Boolean> out = new HashMap<>();
         controllers.forEach((k, v) -> out.put(k, v.recording()));

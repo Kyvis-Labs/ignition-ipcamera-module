@@ -35,6 +35,7 @@ public class OnvifClient {
     static final String MEDIA_NS = "http://www.onvif.org/ver10/media/wsdl";
     static final String EVENTS_NS = "http://www.onvif.org/ver10/events/wsdl";
     static final String SCHEMA_NS = "http://www.onvif.org/ver10/schema";
+    static final String TOPIC_NS = "http://docs.oasis-open.org/wsn/t-1";
 
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
     private final String deviceUrl;
@@ -51,6 +52,18 @@ public class OnvifClient {
     }
 
     public record Profile(String token, String name, String encoding, int width, int height) {
+    }
+
+    /**
+     * One event topic the camera can raise.
+     *
+     * @param topic     path without the namespace prefix, e.g. RuleEngine/CellMotionDetector/Motion;
+     *                  a configured event type matches notifications whose topic contains it
+     * @param dataItems names of the message's data items, e.g. IsMotion or State
+     * @param stateful  whether a data item carries an on/off state the recorder can follow
+     * @param listed    whether GetEventProperties lists it (false: only seen in notifications)
+     */
+    public record EventTopic(String topic, List<String> dataItems, boolean stateful, boolean listed) {
     }
 
     public record DeviceInfo(String manufacturer, String model, String firmware, String serial) {
@@ -124,6 +137,65 @@ public class OnvifClient {
 
     public boolean supportsEvents() {
         return eventsUrl != null;
+    }
+
+    /** The topics the camera can raise (GetEventProperties), in the order it lists them. */
+    public List<EventTopic> eventTopics() throws IOException {
+        if (eventsUrl == null) {
+            return List.of();
+        }
+        Document d = call(eventsUrl, "<GetEventProperties xmlns=\"" + EVENTS_NS + "\"/>", true, null, Duration.ofSeconds(10));
+        return parseTopics(d);
+    }
+
+    /**
+     * Flattens a TopicSet. Each element is a topic namespace level; a level is a topic when it
+     * says so (wstop:topic="true") or describes a message.
+     */
+    static List<EventTopic> parseTopics(Document d) {
+        Element set = Soap.first(d, "TopicSet");
+        List<EventTopic> out = new ArrayList<>();
+        if (set != null) {
+            for (Element c : children(set)) {
+                walkTopics(c, c.getLocalName(), out);
+            }
+        }
+        return out;
+    }
+
+    private static void walkTopics(Element e, String path, List<EventTopic> out) {
+        Element description = null;
+        for (Element c : children(e)) {
+            if ("MessageDescription".equals(c.getLocalName())) {
+                description = c;
+            }
+        }
+        if (description != null || "true".equalsIgnoreCase(e.getAttributeNS(TOPIC_NS, "topic"))) {
+            List<String> items = new ArrayList<>();
+            Element data = description == null ? null : Soap.first(description, "Data");
+            if (data != null) {
+                for (Element i : Soap.all(data, "SimpleItemDescription")) {
+                    items.add(i.getAttribute("Name"));
+                }
+            }
+            boolean stateful = items.stream().anyMatch(i -> OnvifEvent.STATE_ITEMS.contains(i.toLowerCase(java.util.Locale.ROOT)));
+            out.add(new EventTopic(path, List.copyOf(items), stateful, true));
+        }
+        for (Element c : children(e)) {
+            if (!"MessageDescription".equals(c.getLocalName())) {
+                walkTopics(c, path + "/" + c.getLocalName(), out);
+            }
+        }
+    }
+
+    private static List<Element> children(Element e) {
+        List<Element> out = new ArrayList<>();
+        for (org.w3c.dom.Node n = e.getFirstChild(); n != null; n = n.getNextSibling()) {
+            if (n instanceof Element c) {
+                out.add(c);
+            }
+        }
+        return out;
     }
 
     /** Creates a pull point; returns its address. */

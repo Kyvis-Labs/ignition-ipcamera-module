@@ -1,7 +1,7 @@
 import * as React from "react";
 import { useFormContext, useWatch } from "react-hook-form";
 import {
-    Alert, AlertStates, Button, ButtonColorClasses, Card, Checkbox, FormControlInput, MultiValueTable, NumericInput,
+    Alert, AlertStates, Button, ButtonColorClasses, Card, Checkbox, FormControlInput, FormLabel, MultiValueTable, NumericInput,
     SelectInput, TextArea, TextInput, ValueTable, yup,
 } from "@inductiveautomation/ignition-web-ui";
 import {
@@ -181,11 +181,12 @@ export function CameraForm(props: ResourceFormProps) {
                     <FormControlInput input={<NumericInput min={2} />} name={f("bufferRetentionMin")} id="buffer" label="Rolling Buffer (minutes)" />
                     <FormControlInput input={<NumericInput min={1} />} name={f("eventRetentionDays")} id="event-retention" label="Keep Events (days)" />
                 </>}
-                {recordMode === "EVENT" && (
+                {recordMode === "EVENT" && <>
+                    <EventTopicPicker camera={type === "edit" ? (props.defaultValues as any)?.name : undefined} />
                     <FormControlInput input={<ValueTable columnDef={{ header: "EVENT TYPE" }} buttonText="Add Event Type" emptyText="Motion" />}
                         name={f("eventTypes")} id="event-types" label="Event Types"
-                        description="Matched against the camera's ONVIF event topics, e.g. motion, person, vehicle. Empty means motion." />
-                )}
+                        description="Event topics or keywords that start recording. Empty means motion." />
+                </>}
                 {recordMode === "TAG" && (
                     <FormControlInput input={<MultiValueTable columnDef={TRIGGER_COLUMNS} buttonText="Add Trigger" emptyText="No triggers" />}
                         name={f("recordTriggers")} id="record-triggers" label="Record Triggers *"
@@ -211,6 +212,28 @@ export function CameraForm(props: ResourceFormProps) {
     );
 }
 
+/**
+ * Probes the camera described by the form: its ONVIF device URL, or the main stream's host.
+ * A password typed in this form is at .data.password until the form encrypts it on save;
+ * without one, an existing camera's stored credentials are used by the gateway.
+ */
+async function probeFromForm(getValues: (name: string) => any, f: (field: string) => string, camera?: string) {
+    const mainUrl: string = getValues(f("mainUrl")) ?? "";
+    let url: string = getValues(f("onvifUrl")) ?? "";
+    if (!url && mainUrl) {
+        try {
+            url = `http://${new URL(mainUrl.replace(/^rtsps?:/i, "http:")).hostname}/onvif/device_service`;
+        } catch {
+            url = "";
+        }
+    }
+    if (!url) {
+        throw new Error("Enter an ONVIF device URL or a main stream URL first.");
+    }
+    const typed: string = getValues(f("password"))?.data?.password ?? "";
+    return { url, result: await api.probe(url, getValues(f("username")) ?? "", typed, camera) };
+}
+
 /** "Fill from camera": asks the camera over ONVIF for its stream URLs. */
 function OnvifFill(props: { camera?: string }) {
     const { getValues, setValue } = useFormContext();
@@ -219,25 +242,9 @@ function OnvifFill(props: { camera?: string }) {
     const f = (field: string) => joinByDot(prefix, field);
 
     const run = async () => {
-        const mainUrl: string = getValues(f("mainUrl")) ?? "";
-        let url: string = getValues(f("onvifUrl")) ?? "";
-        if (!url && mainUrl) {
-            try {
-                url = `http://${new URL(mainUrl.replace(/^rtsps?:/i, "http:")).hostname}/onvif/device_service`;
-            } catch {
-                url = "";
-            }
-        }
-        if (!url) {
-            setState({ busy: false, ok: false, text: "Enter an ONVIF device URL or a main stream URL first." });
-            return;
-        }
-        // A password typed in this form is at .data.password until the form encrypts it on save;
-        // otherwise an existing camera's stored credentials are used by the gateway.
-        const typed: string = getValues(f("password"))?.data?.password ?? "";
         setState({ busy: true });
         try {
-            const r = await api.probe(url, getValues(f("username")) ?? "", typed, typed ? undefined : props.camera);
+            const { url, result: r } = await probeFromForm(getValues, f, props.camera);
             const opts = { shouldDirty: true, shouldValidate: true };
             setValue(f("onvifUrl"), url, opts);
             if (r.suggestedMain) {
@@ -270,6 +277,103 @@ function OnvifFill(props: { camera?: string }) {
             {state.text && (
                 <Alert id="onvif-probe-result" embedded isDismissible={false}
                     state={state.ok ? AlertStates.SUCCESS : AlertStates.ERROR} description={state.text} />
+            )}
+        </div>
+    );
+}
+
+/** Names for common ONVIF and vendor detection topics, by the topic's last segment. */
+const TOPIC_NAMES: Record<string, string> = {
+    Motion: "Motion",
+    MotionAlarm: "Motion alarm",
+    PeopleDetect: "Person",
+    HumanDetect: "Person",
+    VehicleDetect: "Vehicle",
+    DogCatDetect: "Animal",
+    FaceDetect: "Face",
+    Visitor: "Doorbell",
+    Package: "Package",
+    ImageTooDark: "Too dark",
+    ImageTooBright: "Too bright",
+    ImageTooBlurry: "Out of focus",
+    GlobalSceneChange: "Scene change",
+    Tamper: "Tampering",
+    LineDetector: "Line crossing",
+    FieldDetector: "Intrusion",
+    DigitalInput: "Digital input",
+};
+
+/** "RuleEngine/MyRuleDetector/PeopleDetect" -> "Person"; unknown ones from the last segment. */
+function topicLabel(topic: string): string {
+    const parts = topic.split("/").filter(Boolean);
+    for (let i = parts.length - 1; i >= 0; i--) {
+        if (TOPIC_NAMES[parts[i]]) {
+            return TOPIC_NAMES[parts[i]];
+        }
+    }
+    const words = (parts[parts.length - 1] ?? topic).replace(/Detect(or|ion)?$/, "").replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase();
+    return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/**
+ * "Detect from Camera": lists the camera's on/off event topics as checkboxes that add or
+ * remove the topic in Event Types. Cameras do not always list everything they send, so the
+ * gateway also reads the first events of a short subscription, and for a saved camera adds
+ * what its running subscription has received.
+ */
+function EventTopicPicker(props: { camera?: string }) {
+    const { getValues, setValue, control } = useFormContext();
+    const { prefix } = useConfigurationModeContext();
+    const f = (field: string) => joinByDot(prefix, field);
+    const selected = (useWatch({ control, name: f("eventTypes") }) as string[] | undefined) ?? [];
+    const [state, setState] = React.useState<{ busy: boolean; topics?: string[]; error?: string; note?: string }>({ busy: false });
+
+    const detect = async () => {
+        setState({ busy: true });
+        try {
+            const { result } = await probeFromForm(getValues, f, props.camera);
+            // on/off topics only: the others cannot start or stop a recording
+            const topics = new Set((result.eventTopics ?? []).filter(t => t.stateful).map(t => t.topic));
+            Object.entries(result.seenTopics ?? {}).forEach(([topic, stateful]) => stateful && topics.add(topic));
+            setState({
+                busy: false,
+                topics: [...topics],
+                note: !result.events ? "This camera has no ONVIF events."
+                    : result.eventError && topics.size === 0 ? result.eventError : undefined,
+            });
+        } catch (e) {
+            setState({ busy: false, error: (e as Error).message });
+        }
+    };
+
+    const toggle = (topic: string, on: boolean) => {
+        const current: string[] = getValues(f("eventTypes")) ?? [];
+        const next = on ? (current.includes(topic) ? current : [...current, topic]) : current.filter(t => t !== topic);
+        setValue(f("eventTypes"), next, { shouldDirty: true, shouldValidate: true });
+    };
+
+    return (
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", margin: "0.5rem 0 1rem" }}>
+            <div>
+                <Button colorClass={ButtonColorClasses.SECONDARY} disabled={state.busy} onClick={detect}>
+                    {state.busy ? "Detecting…" : "Detect from Camera"}
+                </Button>
+            </div>
+            {state.error && <Alert id="event-topics-error" embedded isDismissible={false} state={AlertStates.ERROR} description={state.error} />}
+            {state.note && <Alert id="event-topics-note" embedded isDismissible={false} state={AlertStates.WARNING} description={state.note} />}
+            {state.topics && (
+                <FormLabel id="event-topics" label="Detected Events">
+                    {state.topics.length === 0
+                        ? <span>No events found.</span>
+                        : state.topics.map(t => (
+                            // the gateway's own checkbox lists (OPC UA security policies) space rows 0.375rem apart
+                            <div key={`${t}|${selected.includes(t)}`} style={{ margin: "0.375rem 0" }}>
+                                <Checkbox id={`event-topic-${t.replace(/[^A-Za-z0-9]+/g, "-")}`}
+                                    defaultValue={selected.includes(t)} label={topicLabel(t)}
+                                    onChange={(_e, checked) => toggle(t, checked)} />
+                            </div>
+                        ))}
+                </FormLabel>
             )}
         </div>
     );

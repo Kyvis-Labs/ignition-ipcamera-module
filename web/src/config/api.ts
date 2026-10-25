@@ -64,6 +64,11 @@ export interface ProbeResult {
     profiles: Array<{ name: string; encoding?: string; width: number; height: number; uri?: string }>;
     suggestedMain?: string;
     suggestedSub?: string;
+    /** Topics the camera lists, then ones only seen in its first events; stateful = carries an on/off state. */
+    eventTopics?: Array<{ topic: string; dataItems: string[]; stateful: boolean; listed: boolean }>;
+    eventError?: string;
+    /** With a camera name: topics its event subscription has received -> carried an on/off state. */
+    seenTopics?: Record<string, boolean>;
 }
 
 export const api = {

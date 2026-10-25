@@ -149,4 +149,59 @@ class OnvifParsingTest {
         assertTrue(h.contains("opaque=\"5ccc069c403ebaf9f0171e9517f40e41\""));
         assertEquals(StandardCharsets.UTF_8.name(), "UTF-8");
     }
+
+    private static final String TOPICS = """
+        <s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" xmlns:tev="http://www.onvif.org/ver10/events/wsdl"
+          xmlns:wstop="http://docs.oasis-open.org/wsn/t-1" xmlns:tt="http://www.onvif.org/ver10/schema" xmlns:tns1="http://www.onvif.org/ver10/topics">
+        <s:Body><tev:GetEventPropertiesResponse>
+          <wstop:TopicSet>
+            <tns1:RuleEngine>
+              <CellMotionDetector><Motion wstop:topic="true"><tt:MessageDescription IsProperty="true">
+                <tt:Source><tt:SimpleItemDescription Name="Rule" Type="xs:string"/></tt:Source>
+                <tt:Data><tt:SimpleItemDescription Name="IsMotion" Type="xs:boolean"/></tt:Data>
+              </tt:MessageDescription></Motion></CellMotionDetector>
+              <MyRuleDetector>
+                <PeopleDetect wstop:topic="true"><tt:MessageDescription IsProperty="true">
+                  <tt:Data><tt:SimpleItemDescription Name="State" Type="xs:boolean"/></tt:Data></tt:MessageDescription></PeopleDetect>
+                <VehicleDetect wstop:topic="true"><tt:MessageDescription IsProperty="true">
+                  <tt:Data><tt:SimpleItemDescription Name="State" Type="xs:boolean"/></tt:Data></tt:MessageDescription></VehicleDetect>
+              </MyRuleDetector>
+            </tns1:RuleEngine>
+            <tns1:Device><Trigger><DigitalInput wstop:topic="true"/></Trigger></tns1:Device>
+            <tns1:Monitoring><ProcessorUsage wstop:topic="true"><tt:MessageDescription IsProperty="true">
+              <tt:Data><tt:SimpleItemDescription Name="Value" Type="xs:float"/></tt:Data></tt:MessageDescription></ProcessorUsage></tns1:Monitoring>
+          </wstop:TopicSet>
+        </tev:GetEventPropertiesResponse></s:Body></s:Envelope>""";
+
+    @Test
+    void parsesTopicSetIntoPaths() throws Exception {
+        List<OnvifClient.EventTopic> t = OnvifClient.parseTopics(Soap.parse(TOPICS));
+        assertEquals(List.of("RuleEngine/CellMotionDetector/Motion", "RuleEngine/MyRuleDetector/PeopleDetect",
+            "RuleEngine/MyRuleDetector/VehicleDetect", "Device/Trigger/DigitalInput", "Monitoring/ProcessorUsage"),
+            t.stream().map(OnvifClient.EventTopic::topic).toList());
+        assertEquals(List.of("IsMotion"), t.get(0).dataItems());
+        assertTrue(t.get(0).stateful());
+        assertTrue(t.get(1).stateful());
+        assertFalse(t.get(3).stateful(), "a topic with no message description has no known state");
+        // a selected topic matches the notification's prefixed topic
+        assertTrue(new OnvifEvent("tns1:RuleEngine/MyRuleDetector/PeopleDetect", "Changed", java.util.Map.of(),
+            java.util.Map.of("State", "true")).matches(List.of(t.get(1).topic())));
+    }
+
+    @Test
+    void sentTopicsAddUnlistedOnes() throws Exception {
+        List<OnvifClient.EventTopic> listed = OnvifClient.parseTopics(Soap.parse(TOPICS));
+        List<OnvifEvent> sent = List.of(
+            new OnvifEvent("tns1:RuleEngine/CellMotionDetector/Motion", "Initialized", java.util.Map.of(), java.util.Map.of("IsMotion", "false")),
+            new OnvifEvent("tns1:RuleEngine/MyRuleDetector/Visitor", "Initialized", java.util.Map.of(), java.util.Map.of("State", "false")),
+            new OnvifEvent("tns1:Monitoring/OperatingTime/LastReset", "Initialized", java.util.Map.of(), java.util.Map.of("Status", "x")));
+        List<OnvifClient.EventTopic> all = OnvifProbe.withSent(listed, sent);
+        assertEquals(listed.size() + 2, all.size());
+        OnvifClient.EventTopic visitor = all.get(listed.size());
+        assertEquals("RuleEngine/MyRuleDetector/Visitor", visitor.topic());
+        assertTrue(visitor.stateful());
+        assertFalse(visitor.listed());
+        assertFalse(all.get(listed.size() + 1).stateful());
+        assertTrue(all.get(0).listed());
+    }
 }

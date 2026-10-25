@@ -35,7 +35,9 @@ import jakarta.servlet.http.HttpServletResponse;
  *   {@code cidr} also probes each address directly (needed from a bridged container).</li>
  *   <li>{@code POST /data/camera/onvif/probe} {@code {url, username, password, camera?}} -- device info
  *   (with {@code camera} and no password, that camera's stored credentials are used)
- *   and every media profile with its RTSP URI, to fill in mainUrl/subUrl.</li>
+ *   and every media profile with its RTSP URI, to fill in mainUrl/subUrl; the event topics the
+ *   camera lists (eventTopics) and, with {@code camera}, those its subscription has received
+ *   (seenTopics: topic -> carried an on/off state).</li>
  * </ul>
  */
 public final class AdminRoutes {
@@ -170,7 +172,12 @@ public final class AdminRoutes {
                         user = cam.username();
                     }
                 }
-                return GSON.toJsonTree(OnvifProbe.probe(o.get("url").getAsString(), user, password == null ? "" : password));
+                JsonObject out = GSON.toJsonTree(OnvifProbe.probe(o.get("url").getAsString(), user, password == null ? "" : password))
+                    .getAsJsonObject();
+                if (o.has("camera")) {
+                    out.add("seenTopics", GSON.toJsonTree(ref.get().events().seenTopics(o.get("camera").getAsString())));
+                }
+                return out;
             }))
             .mount();
     }

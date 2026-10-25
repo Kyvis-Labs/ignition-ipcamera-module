@@ -64,21 +64,6 @@ const COLUMNS: ColumnDef[] = [
                 : <>{label}</>;
         },
     },
-    {
-        header: "CODECS",
-        fieldName: "codecs",
-        sortable: false,
-        cell: ctx => {
-            const codecs = row(ctx).status?.codecs;
-            if (!codecs) {
-                return <>—</>;
-            }
-            return /H265|HEVC/i.test(codecs)
-                ? <StatusBadge type="warning" status={codecs} showTooltip
-                    tooltipContent="H.265 plays only in browsers with hardware HEVC decode. Prefer H.264 for the main and sub streams." />
-                : <>{codecs}</>;
-        },
-    },
     { header: "VIEWERS", fieldName: "readers", sortable: false, setCellValue: (r: Row) => String(r.status?.readers ?? 0) },
 ];
 
