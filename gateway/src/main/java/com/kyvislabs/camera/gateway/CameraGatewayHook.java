@@ -83,6 +83,16 @@ public class CameraGatewayHook extends AbstractGatewayModuleHook {
             }
 
             @Override
+            public String reveal(com.inductiveautomation.ignition.gateway.secrets.SecretConfig secret, String what) {
+                return manager.reveal(secret, what);
+            }
+
+            @Override
+            public void eventSourceHealth(String camera, boolean ok, String error) {
+                statusTags.eventSource(camera, ok, error);
+            }
+
+            @Override
             public void recordingChanged(String camera, boolean recording, Long eventStartMs) {
                 statusTags.setRecording(camera, recording);
                 if (eventStartMs != null) {

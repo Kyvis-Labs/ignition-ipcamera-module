@@ -21,7 +21,7 @@ import com.kyvislabs.camera.gateway.config.CameraConfig;
  * <pre>
  * [Cameras]MediaServer/Online, LastError
  * [Cameras]&lt;camera&gt;/Online, SubOnline, Recording, RecordMode, Readers, BytesReceived, Codecs, LastError,
- *                    LastEventStart
+ *                    LastEventStart, EventSourceOK, EventSourceError
  * </pre>
  */
 public class StatusTags {
@@ -30,7 +30,7 @@ public class StatusTags {
     private static final String[][] CAMERA_TAGS = {
         {"Online", "bool"}, {"SubOnline", "bool"}, {"Recording", "bool"}, {"RecordMode", "str"},
         {"Readers", "int"}, {"BytesReceived", "long"}, {"Codecs", "str"}, {"LastError", "str"},
-        {"LastEventStart", "date"},
+        {"LastEventStart", "date"}, {"EventSourceOK", "bool"}, {"EventSourceError", "str"},
     };
 
     private final ManagedTagProvider provider;
@@ -98,6 +98,12 @@ public class StatusTags {
 
     public void setRecording(String camera, boolean recording) {
         set(camera + "/Recording", recording);
+    }
+
+    /** ONVIF event subscription health, for EVENT-mode cameras. Alarm on EventSourceOK = false. */
+    public void eventSource(String camera, boolean ok, String error) {
+        set(camera + "/EventSourceOK", ok);
+        set(camera + "/EventSourceError", error == null ? "" : error);
     }
 
     public void lastEventStart(String camera, long ms) {

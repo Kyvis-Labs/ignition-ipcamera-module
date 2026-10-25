@@ -35,6 +35,10 @@ public record CameraConfig(
 
     SecretConfig password,
 
+    @Description("ONVIF device service URL, e.g. http://192.0.2.20/onvif/device_service. "
+        + "Blank = derived from the main stream's host. Used for EVENT mode and stream discovery.")
+    String onvifUrl,
+
     @Description("RTSP transport: tcp (default, most reliable), udp, or automatic.")
     @DefaultValue("tcp")
     String rtspTransport,
@@ -43,6 +47,9 @@ public record CameraConfig(
         + "self-signed certificate (UniFi Protect).")
     String tlsFingerprint,
 
+    @Description("OFF, CONTINUOUS, EVENT (camera's own ONVIF events) or TAG (Ignition tag conditions). "
+        + "Note: retention applies per camera, so switching to EVENT/TAG with pre-roll applies the short "
+        + "buffer retention to this camera's existing continuous recordings too.")
     @DefaultValue("CONTINUOUS")
     RecordMode recordMode,
 
@@ -87,7 +94,7 @@ public record CameraConfig(
     public static final Pattern NAME = Pattern.compile("[A-Za-z0-9_.-]{1,64}");
 
     public static final CameraConfig DEFAULT = new CameraConfig(
-        CameraType.RTSP, "", "", "", null, "tcp", "", RecordMode.CONTINUOUS,
+        CameraType.RTSP, "", "", "", null, "", "tcp", "", RecordMode.CONTINUOUS,
         7, 10, 10, 60, 30, List.of(), List.of(), List.of(), List.of(), List.of());
 
     public CameraConfig {
@@ -104,6 +111,15 @@ public record CameraConfig(
         bookmarkTriggers = bookmarkTriggers == null ? List.of() : List.copyOf(bookmarkTriggers);
         viewRoles = viewRoles == null ? List.of() : List.copyOf(viewRoles);
         playbackRoles = playbackRoles == null ? List.of() : List.copyOf(playbackRoles);
+    }
+
+    /** The configured ONVIF URL, or http://<main stream host>/onvif/device_service. */
+    public String onvifDeviceUrl() {
+        if (onvifUrl != null && !onvifUrl.isBlank()) {
+            return onvifUrl.trim();
+        }
+        java.net.URI u = java.net.URI.create(mainUrl.trim());
+        return "http://" + u.getHost() + "/onvif/device_service";
     }
 
     public boolean hasSubstream() {

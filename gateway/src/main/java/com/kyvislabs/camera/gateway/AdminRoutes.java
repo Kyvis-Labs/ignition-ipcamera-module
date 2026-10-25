@@ -1,6 +1,7 @@
 package com.kyvislabs.camera.gateway;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.Set;
 import java.util.function.Supplier;
 
@@ -9,10 +10,13 @@ import com.inductiveautomation.ignition.common.gson.JsonParser;
 import com.inductiveautomation.ignition.gateway.dataroutes.HttpMethod;
 import com.inductiveautomation.ignition.gateway.dataroutes.PermissionType;
 import com.inductiveautomation.ignition.gateway.dataroutes.RouteGroup;
+import com.inductiveautomation.ignition.gateway.dataroutes.RouteHandler;
 import com.kyvislabs.camera.gateway.auth.TokenService;
 import com.kyvislabs.camera.gateway.config.CameraConfig;
 import com.kyvislabs.camera.gateway.events.CameraEvent;
 import com.kyvislabs.camera.gateway.mediamtx.PathConfigs;
+import com.kyvislabs.camera.gateway.onvif.OnvifDiscovery;
+import com.kyvislabs.camera.gateway.onvif.OnvifProbe;
 import jakarta.servlet.http.HttpServletResponse;
 
 /**
@@ -27,6 +31,10 @@ import jakarta.servlet.http.HttpServletResponse;
  *   camera's event open while {@code on}; the post-roll starts when released.</li>
  *   <li>{@code POST /data/camera/bookmark} {@code {camera, label?, start?, end?, protect?}}
  *   (epoch ms; default now-10 s .. now+10 s).</li>
+ *   <li>{@code POST /data/camera/onvif/discover} {@code {cidr?, waitMs?}} -- WS-Discovery; with
+ *   {@code cidr} also probes each address directly (needed from a bridged container).</li>
+ *   <li>{@code POST /data/camera/onvif/probe} {@code {url, username, password}} -- device info
+ *   and every media profile with its RTSP URI, to fill in mainUrl/subUrl.</li>
  * </ul>
  */
 public final class AdminRoutes {
@@ -79,6 +87,7 @@ public final class AdminRoutes {
             .mount();
 
         mountActions(routes, ref);
+        mountOnvif(routes);
     }
 
     private static void mountActions(RouteGroup routes, Supplier<CameraServices> ref) {
@@ -118,6 +127,59 @@ public final class AdminRoutes {
             })
             .mount();
     }
+
+    private static void mountOnvif(RouteGroup routes) {
+        routes.newRoute("/onvif/discover")
+            .method(HttpMethod.POST)
+            .requirePermission(PermissionType.WRITE)
+            .type(RouteGroup.TYPE_JSON)
+            .nocache()
+            .handler(jsonErrors((req, res) -> {
+                String body = req.readBody();
+                JsonObject o = body == null || body.isBlank() ? new JsonObject() : JsonParser.parseString(body).getAsJsonObject();
+                List<java.net.InetAddress> sweep = o.has("cidr") ? OnvifDiscovery.hosts(o.get("cidr").getAsString()) : List.of();
+                int wait = o.has("waitMs") ? Math.min(10_000, o.get("waitMs").getAsInt()) : 3000;
+                return GSON.toJsonTree(OnvifDiscovery.discover(sweep, wait));
+            }))
+            .mount();
+
+        routes.newRoute("/onvif/probe")
+            .method(HttpMethod.POST)
+            .requirePermission(PermissionType.WRITE)
+            .type(RouteGroup.TYPE_JSON)
+            .nocache()
+            .handler(jsonErrors((req, res) -> {
+                JsonObject o = JsonParser.parseString(req.readBody()).getAsJsonObject();
+                return GSON.toJsonTree(OnvifProbe.probe(o.get("url").getAsString(),
+                    o.has("username") ? o.get("username").getAsString() : "",
+                    o.has("password") ? o.get("password").getAsString() : ""));
+            }))
+            .mount();
+    }
+
+    /** Reports failures (camera unreachable, auth refused...) as 502 + {error} instead of an HTML 500. */
+    private static RouteHandler jsonErrors(RouteHandler h) {
+        return (req, res) -> {
+            try {
+                return h.handle(req, res);
+            } catch (IllegalArgumentException e) {
+                res.setStatus(HttpServletResponse.SC_BAD_REQUEST);
+                return error(e);
+            } catch (Exception e) {
+                res.setStatus(HttpServletResponse.SC_BAD_GATEWAY);
+                return error(e);
+            }
+        };
+    }
+
+    private static JsonObject error(Exception e) {
+        JsonObject o = new JsonObject();
+        o.addProperty("error", e.getMessage() == null ? e.toString() : e.getMessage());
+        return o;
+    }
+
+    private static final com.inductiveautomation.ignition.common.gson.Gson GSON =
+        new com.inductiveautomation.ignition.common.gson.Gson();
 
     static JsonObject status(CameraServices services) {
         CameraManager m = services.manager();

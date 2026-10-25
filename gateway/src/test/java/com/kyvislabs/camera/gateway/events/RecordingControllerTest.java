@@ -25,7 +25,7 @@ class RecordingControllerTest {
     private final List<CameraEvent> closed = new ArrayList<>();
 
     private static CameraConfig cfg(RecordMode mode, int pre, int post) {
-        return new CameraConfig(CameraType.RTSP, "rtsp://h/x", "", "", null, "tcp", "", mode,
+        return new CameraConfig(CameraType.RTSP, "rtsp://h/x", "", "", null, "", "tcp", "", mode,
             1, pre, post, 60, 30, List.of(), List.of(), List.of(), List.of(), List.of());
     }
 

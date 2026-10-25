@@ -12,7 +12,7 @@ import org.junit.jupiter.api.Test;
 
 class CameraAccessTest {
     private static CameraConfig cam(List<String> view, List<String> playback) {
-        return new CameraConfig(CameraType.RTSP, "rtsp://h/x", "", "", null, "tcp", "", RecordMode.OFF,
+        return new CameraConfig(CameraType.RTSP, "rtsp://h/x", "", "", null, "", "tcp", "", RecordMode.OFF,
             1, 0, 0, 60, 1, List.of(), List.of(), List.of(), view, playback);
     }
 

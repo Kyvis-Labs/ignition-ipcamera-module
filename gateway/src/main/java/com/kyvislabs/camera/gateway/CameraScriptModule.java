@@ -12,6 +12,8 @@ import com.inductiveautomation.ignition.common.gson.JsonObject;
 import com.kyvislabs.camera.gateway.events.CameraEvent;
 import com.kyvislabs.camera.gateway.mediamtx.MediaMtxClient;
 import com.kyvislabs.camera.gateway.mediamtx.PathConfigs;
+import com.kyvislabs.camera.gateway.onvif.OnvifDiscovery;
+import com.kyvislabs.camera.gateway.onvif.OnvifProbe;
 
 /**
  * Gateway-scope {@code system.camera.*} -- Perspective, gateway event and tag event scripts.
@@ -105,6 +107,48 @@ public class CameraScriptModule {
     /** Copies [start, end] to an MP4 under the camera's exports folder; returns its path. */
     public String exportClip(String camera, Object start, Object end) throws Exception {
         return svc().events().exportClip(camera, ms(start), ms(end)).toString();
+    }
+
+    /** WS-Discovery; with a CIDR (e.g. "192.0.2.0/24") also probes each address directly. */
+    public List<Map<String, Object>> discoverOnvif(String cidr) throws Exception {
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (OnvifDiscovery.Device d : OnvifDiscovery.discover(
+            cidr == null || cidr.isBlank() ? List.of() : OnvifDiscovery.hosts(cidr), 3000)) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("address", d.address());
+            m.put("xaddrs", d.xaddrs());
+            m.put("name", d.name());
+            m.put("hardware", d.hardware());
+            out.add(m);
+        }
+        return out;
+    }
+
+    public List<Map<String, Object>> discoverOnvif() throws Exception {
+        return discoverOnvif(null);
+    }
+
+    /** Device info and each media profile's RTSP URI (credentials not embedded). */
+    public Map<String, Object> getOnvifProfiles(String url, String username, String password) throws Exception {
+        OnvifProbe.Result r = OnvifProbe.probe(url, username, password);
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("manufacturer", r.device() == null ? null : r.device().manufacturer());
+        m.put("model", r.device() == null ? null : r.device().model());
+        m.put("events", r.events());
+        m.put("mainUrl", r.suggestedMain());
+        m.put("subUrl", r.suggestedSub());
+        List<Map<String, Object>> profiles = new ArrayList<>();
+        for (OnvifProbe.ProfileUri p : r.profiles()) {
+            Map<String, Object> pm = new LinkedHashMap<>();
+            pm.put("name", p.name());
+            pm.put("encoding", p.encoding());
+            pm.put("width", p.width());
+            pm.put("height", p.height());
+            pm.put("uri", p.uri());
+            profiles.add(pm);
+        }
+        m.put("profiles", profiles);
+        return m;
     }
 
     private Map<String, Object> describe(CameraEvent e) {

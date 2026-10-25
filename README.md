@@ -4,12 +4,13 @@ An Ignition module that adds IP camera live view, recording and playback to Pers
 
 The Camera Module provides support for:
 
-1. Generic RTSP cameras and UniFi Protect RTSPS streams
-2. Off, continuous and tag driven recording, with pre-roll and post-roll
-3. Timeline playback, bookmarks and event clips
-4. Live video over WebRTC
-5. Status tags in a tag provider called `Cameras`
-6. Scripting through `system.camera`
+1. Generic RTSP cameras, ONVIF cameras and UniFi Protect RTSPS streams
+2. ONVIF discovery, stream URL lookup and events
+3. Off, continuous, camera event and tag driven recording, with pre-roll and post-roll
+4. Timeline playback, bookmarks and event clips
+5. Live video over WebRTC
+6. Status tags in a tag provider called `Cameras`
+7. Scripting through `system.camera`
 
 Getting Started
 ---------------
@@ -42,6 +43,7 @@ Video is passed through as the camera sends it. A Camera Wall should use camera 
 Camera names become part of the stream path and can only use letters, digits, `_`, `.` and `-`. A camera cannot be renamed because its recordings are stored by name.
 
 - **RTSP:** Enter the stream URLs and put the credentials in their own fields.
+- **ONVIF:** Use `system.camera.getOnvifProfiles` to find the stream URLs.
 - **UniFi Protect:** Enable RTSP on the camera in Protect. Use the `rtsps://...:7441/...` link and the certificate's SHA-256 fingerprint.
 
 Each camera has `viewRoles` and `playbackRoles`. If empty, anyone who can open a view showing the camera can see it.
@@ -52,14 +54,16 @@ Each camera has `viewRoles` and `playbackRoles`. If empty, anyone who can open a
 |---|---|---|
 | `OFF` | Live only | - |
 | `CONTINUOUS` | Records everything | `retentionDays` |
-| `TAG` with pre-roll | Records to a rolling buffer and copies each event out as a clip | `eventRetentionDays` |
-| `TAG` without pre-roll | Starts recording when triggered, about 1-2 seconds late | `eventRetentionDays` |
+| `EVENT` / `TAG` with pre-roll | Records to a rolling buffer and copies each event out as a clip | `eventRetentionDays` |
+| `EVENT` / `TAG` without pre-roll | Starts recording when triggered, about 1-2 seconds late | `eventRetentionDays` |
 
 An event starts `preRollSec` before the first trigger and ends `postRollSec` after the last trigger clears. Long events are split every hour.
 
-> **Note:** Retention is per camera. Switching a camera from `CONTINUOUS` to `TAG` applies the shorter buffer retention to its existing recordings.
+> **Note:** Retention is per camera. Switching a camera from `CONTINUOUS` to `EVENT` or `TAG` applies the shorter buffer retention to its existing recordings.
 
 **TAG conditions:** `true`, `false`, `> n`, `>= n`, `< n`, `<= n`, `= v`, `!= v`. Blank means truthy.
+
+**EVENT types:** Text matched against the camera's ONVIF topics and data, such as `motion`, `person` or `vehicle`. Blank means motion.
 
 Tag driven bookmarks work in any record mode.
 
@@ -112,6 +116,9 @@ The module creates a tag provider called `Cameras`.
 | `<camera>/Recording`, `<camera>/RecordMode` | Recording state |
 | `<camera>/Readers`, `<camera>/BytesReceived` | Stream usage |
 | `<camera>/Codecs`, `<camera>/LastError`, `<camera>/LastEventStart` | Stream details |
+| `<camera>/EventSourceOK`, `<camera>/EventSourceError` | ONVIF event subscription state |
+
+In `EVENT` mode, put an alarm on `EventSourceOK = false` so you know if the camera's events stop.
 
 # Scripting
 
@@ -128,6 +135,9 @@ system.camera.startRecording("front", "Line stopped")
 system.camera.stopRecording("front")
 system.camera.addBookmark("front", "Operator note")
 system.camera.addBookmark("front", "Batch 42", start, end, True)
+
+system.camera.discoverOnvif("192.0.2.0/24")
+system.camera.getOnvifProfiles("http://192.0.2.20/onvif/device_service", "admin", "password")
 ```
 
 # MediaMTX

@@ -27,6 +27,8 @@ import com.kyvislabs.camera.gateway.config.RecordMode;
 import com.kyvislabs.camera.gateway.config.TagTrigger;
 import com.kyvislabs.camera.gateway.mediamtx.MediaMtxClient;
 import com.kyvislabs.camera.gateway.mediamtx.PathConfigs;
+import com.kyvislabs.camera.gateway.onvif.OnvifClient;
+import com.kyvislabs.camera.gateway.onvif.OnvifEventSubscriber;
 
 /**
  * Event recording (EVENT/TAG modes), bookmarks and clip export for every camera.
@@ -49,6 +51,10 @@ public class EventService {
         void recordNow(String camera, boolean on);
 
         void recordingChanged(String camera, boolean recording, Long eventStartMs);
+
+        String reveal(com.inductiveautomation.ignition.gateway.secrets.SecretConfig secret, String what);
+
+        void eventSourceHealth(String camera, boolean ok, String error);
     }
 
     private final GatewayContext context;
@@ -64,6 +70,9 @@ public class EventService {
     private final Map<String, RecordingController> controllers = new ConcurrentHashMap<>();
     private volatile Map<String, CameraConfig> cameras = Map.of();
     private final List<Subscription> subscriptions = new ArrayList<>();
+    /** ONVIF subscribers for EVENT-mode cameras, keyed by camera, with the settings they were built from. */
+    private final Map<String, OnvifEventSubscriber> onvif = new HashMap<>();
+    private final Map<String, String> onvifSignature = new HashMap<>();
     private volatile long lastRetention;
 
     private record Subscription(TagPath path, TagChangeListener listener) {
@@ -98,6 +107,37 @@ public class EventService {
             return existing;
         }));
         resubscribe(next);
+        syncOnvif(next);
+    }
+
+    private void syncOnvif(Map<String, CameraConfig> next) {
+        for (String camera : List.copyOf(onvif.keySet())) {
+            CameraConfig cfg = next.get(camera);
+            if (cfg == null || !wantsOnvif(cfg) || !signature(cfg).equals(onvifSignature.get(camera))) {
+                onvif.remove(camera).close();
+                onvifSignature.remove(camera);
+            }
+        }
+        next.forEach((camera, cfg) -> {
+            if (wantsOnvif(cfg) && !onvif.containsKey(camera)) {
+                OnvifClient client = new OnvifClient(cfg.onvifDeviceUrl(), cfg.username(),
+                    hooks.reveal(cfg.password(), "password for camera '" + camera + "'"));
+                OnvifEventSubscriber sub = new OnvifEventSubscriber(camera, client, cfg.eventTypes(),
+                    (cam, label, on) -> cameraEvent(cam, label, on), hooks::eventSourceHealth);
+                onvif.put(camera, sub);
+                onvifSignature.put(camera, signature(cfg));
+                sub.start();
+            }
+        });
+    }
+
+    private static boolean wantsOnvif(CameraConfig c) {
+        return c.recordMode() == RecordMode.EVENT && c.type() == com.kyvislabs.camera.gateway.config.CameraType.ONVIF;
+    }
+
+    /** Settings that require a new subscription when they change (password by identity of its config). */
+    private static String signature(CameraConfig c) {
+        return c.onvifDeviceUrl() + "|" + c.username() + "|" + c.password() + "|" + c.eventTypes();
     }
 
     private void resubscribe(Map<String, CameraConfig> next) {
@@ -305,6 +345,8 @@ public class EventService {
 
     public void shutdown() {
         unsubscribeAll();
+        onvif.values().forEach(OnvifEventSubscriber::close);
+        onvif.clear();
         controllers.values().forEach(RecordingController::close);
         scheduler.shutdown();
         try {

@@ -19,7 +19,7 @@ class PathConfigsTest {
     private static final MediaServerConfig SERVER = MediaServerConfig.DEFAULT;
 
     private static CameraConfig cam(RecordMode mode, int preRoll, String sub) {
-        return new CameraConfig(CameraType.RTSP, "rtsp://192.0.2.5:554/main", sub, "admin", null, "tcp", "",
+        return new CameraConfig(CameraType.RTSP, "rtsp://192.0.2.5:554/main", sub, "admin", null, "", "tcp", "",
             mode, 7, preRoll, 5, 60, 30, List.of(), List.of(), List.of(), List.of(), List.of());
     }
 
@@ -50,7 +50,7 @@ class PathConfigsTest {
 
     @Test
     void shortBuffersGetShortSegments() {
-        CameraConfig c = new CameraConfig(CameraType.RTSP, "rtsp://h/x", "", "", null, "tcp", "", RecordMode.TAG,
+        CameraConfig c = new CameraConfig(CameraType.RTSP, "rtsp://h/x", "", "", null, "", "tcp", "", RecordMode.TAG,
             7, 10, 5, 5, 30, List.of(), List.of(), List.of(), List.of(), List.of());
         JsonObject main = PathConfigs.desired("x", c, null, SERVER, false).get("cam/x");
         assertEquals("5m", main.get("recordDeleteAfter").getAsString());

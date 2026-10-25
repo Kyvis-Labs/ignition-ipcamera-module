@@ -287,7 +287,7 @@ public class CameraManager {
         return sb.toString();
     }
 
-    String reveal(SecretConfig config, String what) {
+    public String reveal(SecretConfig config, String what) {
         if (config == null) {
             return null;
         }
