@@ -27,6 +27,35 @@ const globalsPlugin = {
     },
 };
 
+// The gateway web UI page is loaded by the gateway's SystemJS (with its AMD extra), which
+// supplies React from its import map. Wrapping the IIFE in define([...]) makes it an AMD
+// module whose exports are the IIFE's return value.
+const amdExternals = {
+    name: "amd-externals",
+    setup(build) {
+        build.onResolve({ filter: /^react(-dom)?$/ }, args => ({ path: args.path, namespace: "amd" }));
+        build.onLoad({ filter: /.*/, namespace: "amd" }, args => ({
+            contents: `module.exports = ${args.path === "react" ? "__amd_react" : "__amd_react_dom"};`,
+            loader: "js",
+        }));
+    },
+};
+
+await esbuild.build({
+    entryPoints: { "config-page": "src/config/index.ts" },
+    bundle: true,
+    format: "iife",
+    globalName: "__cameraConfigPage",
+    target: "es2020",
+    outdir,
+    sourcemap: "linked",
+    minify: process.env.NODE_ENV === "production",
+    plugins: [amdExternals],
+    banner: { js: 'define(["react", "react-dom"], function (__amd_react, __amd_react_dom) {' },
+    footer: { js: "return __cameraConfigPage;\n});" },
+    logLevel: "info",
+});
+
 await esbuild.build({
     entryPoints: { "camera-components": "src/index.ts" },
     bundle: true,

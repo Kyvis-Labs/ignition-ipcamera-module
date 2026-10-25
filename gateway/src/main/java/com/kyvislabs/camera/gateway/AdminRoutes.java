@@ -33,7 +33,8 @@ import jakarta.servlet.http.HttpServletResponse;
  *   (epoch ms; default now-10 s .. now+10 s).</li>
  *   <li>{@code POST /data/camera/onvif/discover} {@code {cidr?, waitMs?}} -- WS-Discovery; with
  *   {@code cidr} also probes each address directly (needed from a bridged container).</li>
- *   <li>{@code POST /data/camera/onvif/probe} {@code {url, username, password}} -- device info
+ *   <li>{@code POST /data/camera/onvif/probe} {@code {url, username, password, camera?}} -- device info
+ *   (with {@code camera} and no password, that camera's stored credentials are used)
  *   and every media profile with its RTSP URI, to fill in mainUrl/subUrl.</li>
  * </ul>
  */
@@ -87,7 +88,7 @@ public final class AdminRoutes {
             .mount();
 
         mountActions(routes, ref);
-        mountOnvif(routes);
+        mountOnvif(routes, ref);
     }
 
     private static void mountActions(RouteGroup routes, Supplier<CameraServices> ref) {
@@ -128,7 +129,7 @@ public final class AdminRoutes {
             .mount();
     }
 
-    private static void mountOnvif(RouteGroup routes) {
+    private static void mountOnvif(RouteGroup routes, Supplier<CameraServices> ref) {
         routes.newRoute("/onvif/discover")
             .method(HttpMethod.POST)
             .requirePermission(PermissionType.WRITE)
@@ -150,9 +151,19 @@ public final class AdminRoutes {
             .nocache()
             .handler(jsonErrors((req, res) -> {
                 JsonObject o = JsonParser.parseString(req.readBody()).getAsJsonObject();
-                return GSON.toJsonTree(OnvifProbe.probe(o.get("url").getAsString(),
-                    o.has("username") ? o.get("username").getAsString() : "",
-                    o.has("password") ? o.get("password").getAsString() : ""));
+                String user = o.has("username") ? o.get("username").getAsString() : "";
+                String password = o.has("password") ? o.get("password").getAsString() : "";
+                // an existing camera's stored password never goes to the browser: probe with it here
+                if (o.has("camera") && password.isEmpty()) {
+                    CameraServices svc = ref.get();
+                    CameraConfig cam = svc.manager().camera(o.get("camera").getAsString())
+                        .orElseThrow(() -> new IllegalArgumentException("no camera named '" + o.get("camera").getAsString() + "'"));
+                    password = svc.manager().reveal(cam.password(), "camera password");
+                    if (user.isEmpty()) {
+                        user = cam.username();
+                    }
+                }
+                return GSON.toJsonTree(OnvifProbe.probe(o.get("url").getAsString(), user, password == null ? "" : password));
             }))
             .mount();
     }

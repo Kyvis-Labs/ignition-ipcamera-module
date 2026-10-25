@@ -18,8 +18,11 @@ Getting Started
 1. Run MediaMTX, see [MediaMTX](#mediamtx)
 2. Build the module, see [Building](#building)
 3. Install the module into Ignition 8.3.9+. Start the gateway with `-Dignition.allowunsignedmodules=true`.
-4. Set the media server settings and add your cameras through the gateway REST API, under `/data/api/v1/resources/com.kyvislabs.camera/`
-5. Add a Camera View or Camera Wall component to a Perspective view and select your camera
+4. Log into the Ignition Gateway
+5. Click on `Connections > Cameras`, click `Media server...` and enter the media server settings
+6. Click `+ Add camera`
+7. Enter the camera, or use `Discover` on the page to find ONVIF cameras
+8. Add a Camera View or Camera Wall component to a Perspective view and select your camera
 
 # Architecture
 
@@ -43,7 +46,7 @@ Video is passed through as the camera sends it. A Camera Wall should use camera 
 Camera names become part of the stream path and can only use letters, digits, `_`, `.` and `-`. A camera cannot be renamed because its recordings are stored by name.
 
 - **RTSP:** Enter the stream URLs and put the credentials in their own fields.
-- **ONVIF:** Use `system.camera.getOnvifProfiles` to find the stream URLs.
+- **ONVIF:** Enter the credentials and click `Fill from camera`.
 - **UniFi Protect:** Enable RTSP on the camera in Protect. Use the `rtsps://...:7441/...` link and the certificate's SHA-256 fingerprint.
 
 Each camera has `viewRoles` and `playbackRoles`. If empty, anyone who can open a view showing the camera can see it.

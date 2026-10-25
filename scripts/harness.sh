@@ -36,5 +36,10 @@ mint() {
 } > "$out/tokens.json"
 chmod 600 "$out/tokens.json"
 
-echo "harness: http://127.0.0.1:${PORT:-8765}/"
-exec python3 -m http.server "${PORT:-8765}" --bind 127.0.0.1 --directory "$out"
+cat > "$out/config.html" <<'HTML'
+<!doctype html><html><head><meta charset="utf-8"><title>Camera config harness</title></head>
+<body style="margin:0;background:#fff"><div id="root"></div><script src="config-harness.js"></script></body></html>
+HTML
+
+echo "harness: http://127.0.0.1:${PORT:-8765}/  (wall: /?wall, config page: /config.html)"
+exec python3 "$here/web/dev/serve.py" "$out" "${PORT:-8765}" "$gw" "$API_TOKEN_FILE"

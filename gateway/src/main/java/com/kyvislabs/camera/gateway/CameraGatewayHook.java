@@ -11,6 +11,7 @@ import com.inductiveautomation.ignition.gateway.config.SingletonResourceHandler;
 import com.inductiveautomation.ignition.gateway.dataroutes.RouteGroup;
 import com.inductiveautomation.ignition.gateway.model.AbstractGatewayModuleHook;
 import com.inductiveautomation.ignition.gateway.model.GatewayContext;
+import com.inductiveautomation.ignition.gateway.web.systemjs.SystemJsModule;
 import com.inductiveautomation.perspective.common.api.ComponentRegistry;
 import com.inductiveautomation.perspective.gateway.api.ComponentModelDelegateRegistry;
 import com.inductiveautomation.perspective.gateway.api.PerspectiveContext;
@@ -50,6 +51,16 @@ public class CameraGatewayHook extends AbstractGatewayModuleHook {
         context.getConfigurationManager().getResourceTypeMetaRegistry()
             .register(MediaServerConfig.META)
             .register(CameraConfig.META);
+        // Connections -> Cameras: the config page is an AMD module served from /res/camera.
+        SystemJsModule page = new SystemJsModule("com.kyvislabs.camera.config", "/res/camera/config-page.js");
+        context.getWebResourceManager().getNavigationModel().getConnections().addCategory("cameras", cat -> cat
+            .label("Cameras")
+            .addPage("Cameras", p -> p
+                .position(10)
+                .mount("/cameras", "CameraConfigPage", page)
+                .addAssociatedResourceType(CameraConfig.TYPE)
+                .addAssociatedResourceType(MediaServerConfig.TYPE)));
+
         statusTags = new StatusTags(context);
         tokens = new TokenService();
         manager = new CameraManager(context, statusTags, tokens);
