@@ -65,6 +65,30 @@ public record OnvifEvent(String topic, String operation, Map<String, String> sou
     }
 
     /**
+     * The topic as a tag folder path: namespace prefixes dropped from every segment and
+     * characters Ignition does not allow in tag names replaced, so
+     * {@code tns1:VideoSource/tnsaxis:DayNightVision} becomes {@code VideoSource/DayNightVision}.
+     */
+    public String tagPath() {
+        StringBuilder out = new StringBuilder();
+        for (String seg : topic.split("/")) {
+            String s = seg.contains(":") ? seg.substring(seg.lastIndexOf(':') + 1) : seg;
+            s = s.replaceAll("[^A-Za-z0-9_ -]", "_").trim();
+            if (!s.isEmpty()) {
+                out.append(out.length() == 0 ? "" : "/").append(s);
+            }
+        }
+        return out.length() == 0 ? "Event" : out.toString();
+    }
+
+    /** Data items as {@code Name=Value} pairs, for a string tag. */
+    public String dataString() {
+        StringBuilder out = new StringBuilder();
+        data.forEach((k, v) -> out.append(out.length() == 0 ? "" : ", ").append(k).append('=').append(v));
+        return out.toString();
+    }
+
+    /**
      * Stable key for one detector: topic plus source items, so two motion rules on the same
      * camera are tracked separately.
      */

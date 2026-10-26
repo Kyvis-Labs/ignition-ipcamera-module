@@ -2,24 +2,66 @@ import * as React from "react";
 import { useFormContext } from "react-hook-form";
 import {
     Alert, AlertStates, Button, ButtonColorClasses, CircularProgress, ColumnDef, FormLabel, InfoTooltipCell, PageHeader, RadioCard,
-    StatusBadge, TextInput, TooltipSize,
+    TextInput, TooltipSize,
 } from "@inductiveautomation/ignition-web-ui";
-import { Content, ResourceModeDataGrid } from "@inductiveautomation/ignition-gateway-lib";
-import { api, CAMERA_TYPE, CameraStatus, DiscoveredDevice } from "./api";
+import {
+    ConfigResponseItem, Content, EnhancedStatusBadgeCell, ResourceModeDataGrid, apiErrorNotification,
+} from "@inductiveautomation/ignition-gateway-lib";
+import { Camera } from "@inductiveautomation/ignition-icons";
+import { CAMERA_TYPE, CameraConfig, DiscoveredDevice, useDiscoverCamerasMutation } from "./camera.service";
 import { CameraForm, CAMERA_DEFAULTS } from "./CameraForm";
 
 const TYPE_LABELS: Record<string, string> = { RTSP: "RTSP", ONVIF: "ONVIF", UNIFI_PROTECT: "UniFi Protect" };
 const MODE_LABELS: Record<string, string> = { OFF: "Off", CONTINUOUS: "Continuous", EVENT: "Camera events", TAG: "Tag conditions" };
 
-interface Row {
-    name: string;
-    description?: string;
-    enabled: boolean;
-    config: { type: string; recordMode: string; subUrl?: string; mainUrl?: string; onvifUrl?: string };
-    status?: CameraStatus;
-}
+/** BadgeStatus is a const enum in the gateway's typings, so it has no runtime object to import. */
+const BADGE = { success: "success", warning: "warning", error: "error", info: "info", default: "default" };
+
+type Row = ConfigResponseItem<CameraConfig>;
 
 const row = (ctx: { row: { originalValue: unknown } }) => ctx.row.originalValue as Row;
+
+/**
+ * The status column from the camera's health checks, which the gateway attaches to every item of
+ * the resource list (CameraConfig.META's status delegate, filled in by CameraHealth) and the grid
+ * polls: no status route of our own. "status" is Online / Offline / Connecting, or a MediaMTX
+ * error; "events" exists for ONVIF EVENT cameras.
+ */
+function StatusCell(props: { row: Row }) {
+    const r = props.row;
+    if (!r.enabled) {
+        return <EnhancedStatusBadgeCell status={BADGE.default} customLabel="Disabled" />;
+    }
+    const status = r.healthchecks?.status?.result;
+    if (!status) {
+        return <EnhancedStatusBadgeCell status={BADGE.default} customLabel="Unknown" />;
+    }
+    const message = status.message ?? "";
+    if (!status.healthy) {
+        if (message === "Offline") {
+            return (
+                <EnhancedStatusBadgeCell status={BADGE.error} customLabel="Offline" showTooltip
+                    tooltipContent="MediaMTX cannot read the main stream. See [Cameras]<name>/LastError." />
+            );
+        }
+        // anything else is MediaMTX's or the module's own error text: the badge opens it in a modal
+        return <EnhancedStatusBadgeCell status={BADGE.error} customLabel="Faulted" errorDescription={message} errorMessage={message} />;
+    }
+    if (message === "Connecting") {
+        return <EnhancedStatusBadgeCell status={BADGE.default} customLabel="Connecting" />;
+    }
+    const substream = status.details?.substream as string | undefined;
+    const events = r.healthchecks?.events?.result;
+    const warnings = [
+        substream === "offline" ? "Substream offline." : null,
+        events && !events.healthy ? `Event source: ${events.message ?? "not delivering"}.` : null,
+    ].filter(Boolean);
+    const tooltip = warnings.length > 0 ? warnings.join(" ") : substream === "online" ? "Substream online." : "No substream.";
+    return (
+        <EnhancedStatusBadgeCell status={warnings.length > 0 ? BADGE.warning : BADGE.success} customLabel="Online"
+            showTooltip tooltipContent={tooltip} />
+    );
+}
 
 const COLUMNS: ColumnDef[] = [
     {
@@ -34,24 +76,7 @@ const COLUMNS: ColumnDef[] = [
     },
     { header: "DESCRIPTION", fieldName: "description" },
     { header: "TYPE", fieldName: "config.type", sortable: false, setCellValue: (r: Row) => TYPE_LABELS[r.config.type] ?? r.config.type },
-    {
-        header: "STATUS",
-        fieldName: "status",
-        sortable: false,
-        cell: ctx => {
-            const r = row(ctx);
-            if (!r.enabled) {
-                return <StatusBadge type="default" status="Disabled" />;
-            }
-            if (!r.status) {
-                return <StatusBadge type="default" status="Unknown" />;
-            }
-            const sub = r.config.subUrl ? (r.status.subOnline ? "Substream online." : "Substream offline.") : "No substream.";
-            return r.status.online
-                ? <StatusBadge type={r.config.subUrl && !r.status.subOnline ? "warning" : "success"} status="Online" showTooltip tooltipContent={sub} />
-                : <StatusBadge type="error" status="Offline" showTooltip tooltipContent="MediaMTX cannot read the main stream. See [Cameras]<name>/LastError." />;
-        },
-    },
+    { header: "STATUS", fieldName: "status", sortable: false, cell: ctx => <StatusCell row={row(ctx)} /> },
     {
         header: "RECORDING",
         fieldName: "config.recordMode",
@@ -59,13 +84,26 @@ const COLUMNS: ColumnDef[] = [
         cell: ctx => {
             const r = row(ctx);
             const label = MODE_LABELS[r.config.recordMode] ?? r.config.recordMode;
-            return r.enabled && r.status?.recording
-                ? <StatusBadge type="info" status={`${label}: recording`} />
+            return r.enabled && r.healthchecks?.status?.result.details?.recording === true
+                ? <EnhancedStatusBadgeCell status={BADGE.info} customLabel={`${label}: recording`} />
                 : <>{label}</>;
         },
     },
-    { header: "VIEWERS", fieldName: "readers", sortable: false, setCellValue: (r: Row) => String(r.status?.readers ?? 0) },
+    {
+        header: "VIEWERS",
+        fieldName: "readers",
+        sortable: false,
+        setCellValue: (r: Row) => String(r.metrics?.readers?.metric.value ?? 0),
+    },
 ];
+
+const BLANK_STATE = {
+    label: "No Cameras Configured",
+    content: "Add an IP camera by its RTSP stream URLs, or pick one that answers ONVIF discovery.",
+    primaryLabel: "Create Camera",
+    // the blank state's icon box is 8.75rem square; the icon's own size is 24 px
+    icon: <Camera width="100%" height="100%" />,
+};
 
 /** What the Choose Camera step found; kept here so it survives Back/Next within one wizard. */
 interface Discovery {
@@ -78,32 +116,23 @@ interface Discovery {
 
 const NO_DISCOVERY: Discovery = { busy: false, cidr: "", found: null, error: null, choice: "manual" };
 
-/** Connections → Cameras → Connections: the gateway's resource grid, plus live status and ONVIF discovery. */
+/** Connections → Cameras → Connections: the gateway's resource grid, plus ONVIF discovery. */
 export function CamerasPage() {
-    const [status, setStatus] = React.useState<Record<string, CameraStatus>>({});
     const [discovery, setDiscovery] = React.useState<Discovery>(NO_DISCOVERY);
     const cameras = React.useRef<Row[]>([]);
 
-    React.useEffect(() => {
-        let alive = true;
-        const tick = () => api.status().then(st => alive && setStatus(st)).catch(() => undefined);
-        tick();
-        const id = window.setInterval(tick, 5000);
-        return () => {
-            alive = false;
-            window.clearInterval(id);
-        };
-    }, []);
-
+    // The grid owns the data; this only remembers it for the discovery step's "already added".
     const transformData = React.useCallback((items: Row[]) => {
         cameras.current = items;
-        return items.map(r => ({ ...r, status: status[r.name] }));
-    }, [status]);
+        return items;
+    }, []);
 
     const createSteps = React.useCallback(() => [
         {
             id: "choose-camera",
             title: "Choose Camera",
+            description: "Enter a camera manually, or discover ONVIF cameras and choose one. On the next step, use the "
+                + "camera's credentials to fill in its stream URLs.",
             validationRequired: false,
             content: <ChooseCameraStep discovery={discovery} setDiscovery={setDiscovery} cameras={cameras.current} />,
         },
@@ -124,11 +153,7 @@ export function CamerasPage() {
                     formDefaults={CAMERA_DEFAULTS}
                     transformData={transformData}
                     rename={false}
-                    blankStateConfig={{
-                        label: "No Cameras Configured",
-                        content: "Add an IP camera by its RTSP stream URLs, or pick one that answers ONVIF discovery.",
-                        primaryLabel: "Create Camera",
-                    }}
+                    blankStateConfig={BLANK_STATE}
                 />
             </Content>
         </>
@@ -156,16 +181,17 @@ function hostOf(url?: string): string | null {
 function ChooseCameraStep(props: { discovery: Discovery; setDiscovery: React.Dispatch<React.SetStateAction<Discovery>>; cameras: Row[] }) {
     const { discovery: d, setDiscovery } = props;
     const { setValue } = useFormContext();
+    const [discover] = useDiscoverCamerasMutation();
 
     const search = React.useCallback(async (cidr: string) => {
         setDiscovery(prev => ({ ...prev, busy: true, error: null }));
         try {
-            const found = await api.discover(cidr.trim() || undefined);
+            const found = await discover(cidr.trim() ? { cidr: cidr.trim() } : {}).unwrap();
             setDiscovery(prev => ({ ...prev, busy: false, found }));
         } catch (e) {
-            setDiscovery(prev => ({ ...prev, busy: false, found: prev.found ?? [], error: (e as Error).message }));
+            setDiscovery(prev => ({ ...prev, busy: false, found: prev.found ?? [], error: apiErrorNotification(e) }));
         }
-    }, [setDiscovery]);
+    }, [discover, setDiscovery]);
 
     // Hosts already configured, so a discovered camera that is already added says so.
     const existing = React.useMemo(() => {
@@ -208,8 +234,6 @@ function ChooseCameraStep(props: { discovery: Discovery; setDiscovery: React.Dis
 
     return (
         <>
-            <p>Enter a camera manually, or discover ONVIF cameras and choose one. On the next step, use the camera's
-                credentials to fill in its stream URLs.</p>
             <FormLabel id="discover-cidr" label="Subnet"
                 description="Optional. Blank sends a multicast probe, which only reaches the gateway's own network. A subnet such as 192.0.2.0/24 probes every address in it directly.">
                 <div style={{ display: "flex", gap: "0.5rem" }}>

@@ -4,7 +4,10 @@
     "camera": {
       "type": "string",
       "description": "The configured camera to show. The dropdown lists the gateway's cameras; any name or binding works.",
-      "default": ""
+      "default": "",
+      "extension": {
+        "suggestion-source": "camera.cameras"
+      }
     },
     "mode": {
       "type": "string",
@@ -26,13 +29,10 @@
     },
     "quality": {
       "type": "string",
-      "description": "Which stream to show: auto (the substream when the component is 720px wide or less), main, sub, a transcode profile set on the gateway (e.g. 720p), or custom (the size and bitrate in customQuality). A transcode applies to live video and playback. A stream this browser cannot decode is transcoded automatically.",
+      "description": "The size to show: auto (the camera's own stream, transcoded only when this browser cannot decode it), or a transcode profile from Camera Settings (e.g. 720p). The dropdown lists the profiles. Applies to live video and playback. Also accepted: main, sub, or custom (the size and bitrate in customQuality).",
       "default": "auto",
-      "suggestions": {
-        "Automatic": "auto",
-        "Main stream": "main",
-        "Substream": "sub",
-        "Custom (customQuality)": "custom"
+      "extension": {
+        "suggestion-source": "camera.profiles"
       }
     },
     "customQuality": {

@@ -31,11 +31,15 @@ const globalsPlugin = {
 // built from the gateway's own React, form and component libraries, which its import map
 // supplies. They are bundled as CommonJS with those libraries external, and wrapped in
 // define([...]) so SystemJS hands them in as the require() results.
+// (The names are the gateway's SystemJsModuleRegistryImpl import map; redux is listed for the
+// RTK Query endpoints the pages inject into the gateway's BaseApi.)
 const gatewayLibs = [
     "react",
     "react-dom",
     "react-hook-form",
     "react-router-dom",
+    "react-redux",
+    "@reduxjs/toolkit",
     "@inductiveautomation/ignition-web-ui",
     "@inductiveautomation/ignition-gateway-lib",
     "@inductiveautomation/ignition-icons",

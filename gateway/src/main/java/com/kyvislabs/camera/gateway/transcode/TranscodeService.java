@@ -49,6 +49,8 @@ public class TranscodeService {
     private final Supplier<String> serviceToken;
     private final Path cacheDir;
     private final Map<String, CompletableFuture<Path>> jobs = new ConcurrentHashMap<>();
+    /** Window copies in progress; not transcodes, so not counted against the transcode limit. */
+    private final Map<String, CompletableFuture<Path>> copies = new ConcurrentHashMap<>();
     private volatile Map<String, JsonObject> runtime = Map.of();
     private volatile Instant runtimeAt = Instant.EPOCH;
 
@@ -264,6 +266,51 @@ public class TranscodeService {
             jobs.remove(key);
         }
         return out;
+    }
+
+    /**
+     * Longest recording window copied into the cache for untranscoded playback. Short, like a
+     * transcode window: a browser starts a window only once it has fetched a good part of it, and
+     * a 5 MP camera records about 0.5 MB/s. The player preloads the next window, so boundaries
+     * are not seen.
+     */
+    public static final double MAX_COPY_WINDOW_SEC = 30;
+
+    /**
+     * One recording window as recorded (no transcode), fetched from MediaMTX into the cache so
+     * the route can serve it with a length and byte ranges. MediaMTX's own {@code /get} response
+     * has neither, and a browser given a window with an audio track that way does not reach a
+     * playable state until the whole window has arrived (a minute for a 5 MP camera), and then
+     * cannot seek within it. A window reaching the live edge is re-fetched every 10 s rather than
+     * cached, as it grows.
+     */
+    public Path window(String camera, long startMs, double durationSec) throws Exception {
+        boolean growing = startMs + (long) (durationSec * 1000) > System.currentTimeMillis() - 5000;
+        Path out = cacheDir.resolve(key(camera + "|" + startMs + "|" + durationSec + "|copy"
+            + (growing ? "|" + System.currentTimeMillis() / 10_000 : "")) + ".mp4");
+        if (Files.exists(out)) {
+            return out;
+        }
+        String k = out.getFileName().toString();
+        CompletableFuture<Path> mine = new CompletableFuture<>();
+        CompletableFuture<Path> running = copies.putIfAbsent(k, mine);
+        if (running != null) {
+            return running.get(timeout(durationSec).toMillis(), TimeUnit.MILLISECONDS);
+        }
+        try {
+            Files.createDirectories(cacheDir);
+            long t0 = System.nanoTime();
+            manager.client().download(PathConfigs.mainPath(camera), Instant.ofEpochMilli(startMs), durationSec, out);
+            log.debugf("copied %s %s %.0fs in %d ms", camera, Instant.ofEpochMilli(startMs), durationSec,
+                (System.nanoTime() - t0) / 1_000_000);
+            mine.complete(out);
+            return out;
+        } catch (Exception e) {
+            mine.completeExceptionally(e);
+            throw e;
+        } finally {
+            copies.remove(k);
+        }
     }
 
     public static final class LimitReached extends Exception {

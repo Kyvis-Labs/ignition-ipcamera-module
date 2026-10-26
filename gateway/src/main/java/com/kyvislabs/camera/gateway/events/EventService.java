@@ -55,6 +55,11 @@ public class EventService {
         String reveal(com.inductiveautomation.ignition.gateway.secrets.SecretConfig secret, String what);
 
         void eventSourceHealth(String camera, boolean ok, String error);
+
+        /** Receives what every ONVIF subscription learns, for the tag provider. */
+        default OnvifEventSubscriber.Observer onvifObserver() {
+            return new OnvifEventSubscriber.Observer() { };
+        }
     }
 
     private final GatewayContext context;
@@ -70,7 +75,7 @@ public class EventService {
     private final Map<String, RecordingController> controllers = new ConcurrentHashMap<>();
     private volatile Map<String, CameraConfig> cameras = Map.of();
     private final List<Subscription> subscriptions = new ArrayList<>();
-    /** ONVIF subscribers for EVENT-mode cameras, keyed by camera, with the settings they were built from. */
+    /** ONVIF subscribers for cameras that subscribe (EVENT mode or ONVIF tags), keyed by camera, with the settings they were built from. */
     private final Map<String, OnvifEventSubscriber> onvif = new HashMap<>();
     private final Map<String, String> onvifSignature = new HashMap<>();
     /** camera -> topic -> carried an on/off state; what each camera's subscription has received (memory only). */
@@ -200,6 +205,8 @@ public class EventService {
                     (cam, key, label, on) -> cameraEvent(cam, key, label, on), hooks::eventSourceHealth);
                 sub.onSeen((topic, stateful) -> seenTopics.computeIfAbsent(camera, k -> new java.util.concurrent.ConcurrentSkipListMap<>())
                     .merge(topic, stateful, Boolean::logicalOr));
+                sub.setObserver(hooks.onvifObserver());
+                sub.setRequired(cfg.recordMode() == RecordMode.EVENT);
                 onvif.put(camera, sub);
                 onvifSignature.put(camera, signature(cfg));
                 sub.start();
@@ -208,12 +215,12 @@ public class EventService {
     }
 
     private static boolean wantsOnvif(CameraConfig c) {
-        return c.recordMode() == RecordMode.EVENT && c.type() == com.kyvislabs.camera.gateway.config.CameraType.ONVIF;
+        return c.subscribesOnvif();
     }
 
     /** Settings that require a new subscription when they change (password by identity of its config). */
     private static String signature(CameraConfig c) {
-        return c.onvifDeviceUrl() + "|" + c.username() + "|" + c.password() + "|" + c.eventTypes();
+        return c.onvifDeviceUrl() + "|" + c.username() + "|" + c.password() + "|" + c.eventTypes() + "|" + c.recordMode();
     }
 
     private void resubscribe(Map<String, CameraConfig> next) {
@@ -507,7 +514,8 @@ public class EventService {
     /** Snapshot of controller state, for status. */
     /**
      * Event topics this camera's ONVIF subscription has received since the gateway started,
-     * each with whether it carried an on/off state. Only EVENT-mode ONVIF cameras subscribe.
+     * each with whether it carried an on/off state. Only ONVIF cameras in EVENT mode or with
+     * ONVIF tags enabled subscribe.
      */
     public Map<String, Boolean> seenTopics(String camera) {
         return Map.copyOf(seenTopics.getOrDefault(camera, Map.of()));

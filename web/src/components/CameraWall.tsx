@@ -212,6 +212,16 @@ export function CameraWall(props: ComponentProps<CameraWallProps>) {
         return c.playing ? c.base + (performance.now() - c.at) * c.rate : c.base;
     };
     const lastWritten = React.useRef<number | null>(null);
+    // every playbackTime written lately, so a late echo of one (the Designer, a slow link) is
+    // never mistaken for a seek; see CameraView
+    const recentWrites = React.useRef<number[]>([]);
+    const noteWrite = (t: number) => {
+        lastWritten.current = t;
+        recentWrites.current.push(t);
+        if (recentWrites.current.length > 60) {
+            recentWrites.current.shift();
+        }
+    };
 
     React.useEffect(() => {
         clock.current = { ...clock.current, base: seek.to, at: performance.now() };
@@ -230,7 +240,7 @@ export function CameraWall(props: ComponentProps<CameraWallProps>) {
             const t = clockNow();
             setMaster(t);
             if (lastWritten.current === null || Math.abs(t - lastWritten.current) >= 1000) {
-                lastWritten.current = Math.round(t);
+                noteWrite(Math.round(t));
                 props.store.props.write("playbackTime", lastWritten.current);
             }
             if (clock.current.playing && t > Date.now() - 3000) {
@@ -243,9 +253,10 @@ export function CameraWall(props: ComponentProps<CameraWallProps>) {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [live]);
 
-    // Echoes of our own writes land near the clock; only a real jump counts as a seek.
+    // Echoes of our own writes are recognised by value; one rounded by a binding lands near the
+    // clock. Only a real jump counts as a seek.
     const propTime = toMs(p.playbackTime);
-    if (!live && propTime !== null && propTime !== lastWritten.current && propTime !== seek.to
+    if (!live && propTime !== null && propTime !== seek.to && !recentWrites.current.includes(propTime)
         && Math.abs(propTime - master) > 2000) {
         setSeek({ to: propTime, nonce: seek.nonce + 1 });
         setFollow(false);
@@ -257,7 +268,7 @@ export function CameraWall(props: ComponentProps<CameraWallProps>) {
             setFollow(false);
             setViewEnd(Math.min(Date.now(), t + zoomMs / 2));
         }
-        lastWritten.current = Math.round(t);
+        noteWrite(Math.round(t));
         props.store.props.write("playbackTime", lastWritten.current);
         props.store.props.write("mode", "playback");
         setSeek(s => ({ to: t, nonce: s.nonce + 1 }));

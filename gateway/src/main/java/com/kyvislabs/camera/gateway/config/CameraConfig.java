@@ -86,7 +86,12 @@ public record CameraConfig(
     List<String> viewRoles,
 
     @Description("Roles allowed to view recordings. Empty = same as viewRoles.")
-    List<String> playbackRoles
+    List<String> playbackRoles,
+
+    @Description("ONVIF: subscribe to the camera's events in any record mode and expose them, with the "
+        + "device information, as tags under [Cameras]<camera>/Onvif.")
+    @DefaultValue("true")
+    Boolean onvifTags
 ) {
     public static final ResourceType TYPE = new ResourceType(CameraModule.MODULE_ID, "camera");
 
@@ -98,7 +103,7 @@ public record CameraConfig(
 
     public static final CameraConfig DEFAULT = new CameraConfig(
         CameraType.RTSP, "", "", "", null, "", "tcp", "", RecordMode.CONTINUOUS,
-        7, 10, 10, 60, 30, List.of(), List.of(), List.of(), List.of(), List.of());
+        7, 10, 10, 60, 30, List.of(), List.of(), List.of(), List.of(), List.of(), true);
 
     public CameraConfig {
         type = type == null ? CameraType.RTSP : type;
@@ -114,6 +119,15 @@ public record CameraConfig(
         bookmarkTriggers = bookmarkTriggers == null ? List.of() : List.copyOf(bookmarkTriggers);
         viewRoles = viewRoles == null ? List.of() : List.copyOf(viewRoles);
         playbackRoles = playbackRoles == null ? List.of() : List.copyOf(playbackRoles);
+        onvifTags = onvifTags == null || onvifTags;
+    }
+
+    /**
+     * Whether the gateway keeps an ONVIF event subscription open to this camera: EVENT mode
+     * needs one to record, and ONVIF tags need one in any mode.
+     */
+    public boolean subscribesOnvif() {
+        return type == CameraType.ONVIF && (recordMode == RecordMode.EVENT || onvifTags);
     }
 
     /** The configured ONVIF URL, or http://<main stream host>/onvif/device_service. */
@@ -135,6 +149,14 @@ public record CameraConfig(
         .description("IP cameras served to Perspective through MediaMTX.")
         .defaultConfig(DEFAULT)
         .buildRouteDelegate(r -> r.configSchema(CameraConfig.class).openApiTagName("Cameras"))
+        // Puts each camera's health checks and metrics on the resource API, where the gateway's
+        // resource grid (and anything else reading /data/api/v1/resources) picks them up. The
+        // registrations behind these names are made by CameraHealth.
+        .buildStatusDelegate(s -> s
+            .instanceHealthCheck("status", "camera.cameras.%s.status")
+            .instanceHealthCheck("events", "camera.cameras.%s.events")
+            .instanceMetric("readers", "camera.cameras.%s.readers")
+            .instanceMetric("bytesReceived", "camera.cameras.%s.bytesReceived"))
         .buildValidator((c, v) -> {
             v.requireNotEmpty("mainUrl", c.mainUrl());
             v.checkField(c.onvifUrl() == null || c.onvifUrl().isBlank() || c.onvifUrl().matches("(?i)https?://.+"),

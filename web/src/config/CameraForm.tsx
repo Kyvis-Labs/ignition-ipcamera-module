@@ -5,10 +5,10 @@ import {
     SelectInput, TextArea, TextInput, ValueTable, yup,
 } from "@inductiveautomation/ignition-web-ui";
 import {
-    OptionalPasswordFieldSchema, PasswordInput, ResourceFormProps, SchemaUtils, StepWatcher, joinByDot,
+    OptionalPasswordFieldSchema, PasswordInput, ResourceFormProps, SchemaUtils, StepWatcher, apiErrorNotification, joinByDot,
     useConfigurationModeContext, useEnhancedFormContext, useMountExtensionPointForm, useSchemaValidationContext,
 } from "@inductiveautomation/ignition-gateway-lib";
-import { api } from "./api";
+import { ProbeArgs, ProbeResult, useProbeCameraMutation } from "./camera.service";
 
 /** Also the gateway's rule (CameraConfig.NAME): the name becomes the stream path cam/<name>. */
 const NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
@@ -54,6 +54,7 @@ const SCHEMA = SchemaUtils.createBackupConfigSchema(yup.object({
         bookmarkTriggers: yup.array().of(trigger.shape({ preSec: cellInt(), postSec: cellInt() })).default([]),
         viewRoles: yup.array().of(yup.string().defined()).default([]),
         playbackRoles: yup.array().of(yup.string().defined()).default([]),
+        onvifTags: yup.boolean().default(true),
     }),
 }));
 
@@ -155,10 +156,13 @@ export function CameraForm(props: ResourceFormProps) {
                     label="Substream URL" description="Low resolution. Camera walls use it for tiles; without one, every tile decodes the main stream." />
                 <FormControlInput input={<TextInput />} name={f("username")} id="username" label="Username" />
                 <PasswordInput name={f("password")} context={context} id="password" label="Password" />
-                {camType === "ONVIF" && (
+                {camType === "ONVIF" && <>
                     <FormControlInput input={<TextInput placeholder="http://192.0.2.20/onvif/device_service" />} name={f("onvifUrl")}
                         id="onvif-url" label="ONVIF Device URL" description="Blank means http://<main stream host>/onvif/device_service." />
-                )}
+                    <FormControlInput input={<Checkbox label="Subscribe to the camera's events in any record mode." defaultValue={context.getValues(f("onvifTags")) ?? true} />}
+                        name={f("onvifTags")} id="onvif-tags" label="ONVIF Tags"
+                        description="Exposes every event topic (Active, LastSeen, Data) and the device information as tags under [Cameras]<name>/Onvif." />
+                </>}
                 {camType !== "UNIFI_PROTECT" && <OnvifFill camera={type === "edit" ? (props.defaultValues as any)?.name : undefined} />}
                 <FormControlInput input={<SelectInput values={TRANSPORTS} />} name={f("rtspTransport")} id="rtsp-transport" label="RTSP Transport" />
                 {(camType === "UNIFI_PROTECT" || mainUrl.toLowerCase().startsWith("rtsps")) && (
@@ -217,7 +221,8 @@ export function CameraForm(props: ResourceFormProps) {
  * A password typed in this form is at .data.password until the form encrypts it on save;
  * without one, an existing camera's stored credentials are used by the gateway.
  */
-async function probeFromForm(getValues: (name: string) => any, f: (field: string) => string, camera?: string) {
+async function probeFromForm(probe: (args: ProbeArgs) => Promise<ProbeResult>, getValues: (name: string) => any,
+                             f: (field: string) => string, camera?: string) {
     const mainUrl: string = getValues(f("mainUrl")) ?? "";
     let url: string = getValues(f("onvifUrl")) ?? "";
     if (!url && mainUrl) {
@@ -231,20 +236,21 @@ async function probeFromForm(getValues: (name: string) => any, f: (field: string
         throw new Error("Enter an ONVIF device URL or a main stream URL first.");
     }
     const typed: string = getValues(f("password"))?.data?.password ?? "";
-    return { url, result: await api.probe(url, getValues(f("username")) ?? "", typed, camera) };
+    return { url, result: await probe({ url, username: getValues(f("username")) ?? "", password: typed, camera }) };
 }
 
 /** "Fill from camera": asks the camera over ONVIF for its stream URLs. */
 function OnvifFill(props: { camera?: string }) {
     const { getValues, setValue } = useFormContext();
     const { prefix } = useConfigurationModeContext();
+    const [probe] = useProbeCameraMutation();
     const [state, setState] = React.useState<{ busy: boolean; ok?: boolean; text?: string }>({ busy: false });
     const f = (field: string) => joinByDot(prefix, field);
 
     const run = async () => {
         setState({ busy: true });
         try {
-            const { url, result: r } = await probeFromForm(getValues, f, props.camera);
+            const { url, result: r } = await probeFromForm(args => probe(args).unwrap(), getValues, f, props.camera);
             const opts = { shouldDirty: true, shouldValidate: true };
             setValue(f("onvifUrl"), url, opts);
             if (r.suggestedMain) {
@@ -263,7 +269,7 @@ function OnvifFill(props: { camera?: string }) {
                     + (r.events ? ". Events supported." : ". No events service."),
             });
         } catch (e) {
-            setState({ busy: false, ok: false, text: `Probe failed: ${(e as Error).message}` });
+            setState({ busy: false, ok: false, text: `Probe failed: ${apiErrorNotification(e)}` });
         }
     };
 
@@ -324,6 +330,7 @@ function topicLabel(topic: string): string {
 function EventTopicPicker(props: { camera?: string }) {
     const { getValues, setValue, control } = useFormContext();
     const { prefix } = useConfigurationModeContext();
+    const [probe] = useProbeCameraMutation();
     const f = (field: string) => joinByDot(prefix, field);
     const selected = (useWatch({ control, name: f("eventTypes") }) as string[] | undefined) ?? [];
     const [state, setState] = React.useState<{ busy: boolean; topics?: string[]; error?: string; note?: string }>({ busy: false });
@@ -331,7 +338,7 @@ function EventTopicPicker(props: { camera?: string }) {
     const detect = async () => {
         setState({ busy: true });
         try {
-            const { result } = await probeFromForm(getValues, f, props.camera);
+            const { result } = await probeFromForm(args => probe(args).unwrap(), getValues, f, props.camera);
             // on/off topics only: the others cannot start or stop a recording
             const topics = new Set((result.eventTopics ?? []).filter(t => t.stateful).map(t => t.topic));
             Object.entries(result.seenTopics ?? {}).forEach(([topic, stateful]) => stateful && topics.add(topic));
@@ -342,7 +349,7 @@ function EventTopicPicker(props: { camera?: string }) {
                     : result.eventError && topics.size === 0 ? result.eventError : undefined,
             });
         } catch (e) {
-            setState({ busy: false, error: (e as Error).message });
+            setState({ busy: false, error: apiErrorNotification(e) });
         }
     };
 

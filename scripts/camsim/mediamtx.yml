@@ -1,0 +1,37 @@
+rtsp: yes
+rtspAddress: :8554
+rtspTransports: [tcp]
+hls: no
+webrtc: no
+api: no
+metrics: no
+pprof: no
+playback: no
+srt: no
+rtmp: no
+logLevel: info
+paths:
+  cam1:
+    runOnInit: sh /publish.sh 'cam1 main' 1280x720 15 h264 1500 $RTSP_PORT $MTX_PATH
+    runOnInitRestart: yes
+  cam1sub:
+    runOnInit: sh /publish.sh 'cam1 sub' 640x360 10 h264 400 $RTSP_PORT $MTX_PATH
+    runOnInitRestart: yes
+  cam2:
+    runOnInit: sh /publish.sh 'cam2 main' 1280x720 15 h264 1500 $RTSP_PORT $MTX_PATH
+    runOnInitRestart: yes
+  cam2sub:
+    runOnInit: sh /publish.sh 'cam2 sub' 640x360 10 h264 400 $RTSP_PORT $MTX_PATH
+    runOnInitRestart: yes
+  cam3:
+    runOnInit: sh /publish.sh 'cam3 main' 1280x720 15 h264 1500 $RTSP_PORT $MTX_PATH
+    runOnInitRestart: yes
+  cam3sub:
+    runOnInit: sh /publish.sh 'cam3 sub' 640x360 10 h264 400 $RTSP_PORT $MTX_PATH
+    runOnInitRestart: yes
+  cam4:
+    runOnInit: sh /publish.sh 'cam4 main' 1280x720 15 h265 1500 $RTSP_PORT $MTX_PATH
+    runOnInitRestart: yes
+  cam4sub:
+    runOnInit: sh /publish.sh 'cam4 sub' 640x360 10 h264 400 $RTSP_PORT $MTX_PATH
+    runOnInitRestart: yes

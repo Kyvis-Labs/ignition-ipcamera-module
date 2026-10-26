@@ -5,8 +5,9 @@ import {
 } from "@inductiveautomation/ignition-web-ui";
 import {
     FormContent, OptionalPasswordFieldSchema, PasswordInput, ResourceModeSingletonPage, joinByDot, useConfigurationModeContext,
+    useQueryErrorToast,
 } from "@inductiveautomation/ignition-gateway-lib";
-import { api, MEDIA_SERVER_TYPE, ServerStatus } from "./api";
+import { MEDIA_SERVER_TYPE, ServerStatus, useGetServerStatusQuery } from "./camera.service";
 
 const URL = /^https?:\/\/.+/i;
 const PROFILE_NAME = /^[A-Za-z0-9_-]{1,32}$/;
@@ -104,7 +105,9 @@ function SettingsForm() {
     const transcode = useWatch({ control: context.control, name: f("transcodeEnabled") }) as boolean | undefined;
     const encoder = useWatch({ control: context.control, name: f("transcodeEncoder") }) as string | undefined;
     const mode = (useWatch({ control: context.control, name: f("serverMode") }) as string | undefined) ?? "AUTO";
-    const status = useServerStatus();
+    // The media server and transcode state, polled while the page is open; undefined until known.
+    const { data: status, error: statusError } = useGetServerStatusQuery(undefined, { pollingInterval: 5000 });
+    useQueryErrorToast(statusError);
     const usage = status?.transcodes;
     const bundled = status?.server.bundled;
     const usable = !!bundled && bundled.platform === status?.server.hostPlatform;
@@ -233,22 +236,6 @@ function SettingsForm() {
             </div>
         </FormContent>
     );
-}
-
-/** The media server and transcode state, polled while the page is open; null until known. */
-function useServerStatus() {
-    const [status, setStatus] = React.useState<ServerStatus | null>(null);
-    React.useEffect(() => {
-        let alive = true;
-        const tick = () => api.serverStatus().then(st => alive && setStatus(st)).catch(() => undefined);
-        tick();
-        const id = window.setInterval(tick, 5000);
-        return () => {
-            alive = false;
-            window.clearInterval(id);
-        };
-    }, []);
-    return status;
 }
 
 /** One line on what the gateway is running now. */

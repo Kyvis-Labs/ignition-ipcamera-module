@@ -59,6 +59,20 @@ export function CameraView(props: ComponentProps<CameraViewProps>) {
     const [viewEnd, setViewEnd] = React.useState(Date.now());
     const [follow, setFollow] = React.useState(true);
     const lastWritten = React.useRef<number | null>(null);
+    /**
+     * Every playbackTime value written lately. A write comes back as a prop change, and in the
+     * Designer (or over a slow link) several seconds late, by which time playback has moved on:
+     * such an echo must not count as a seek, or playback reloads the window, falls behind, and
+     * the next late echo seeks it again, for ever. 60 entries is a minute of once-a-second writes.
+     */
+    const recentWrites = React.useRef<number[]>([]);
+    const noteWrite = (t: number) => {
+        lastWritten.current = t;
+        recentWrites.current.push(t);
+        if (recentWrites.current.length > 60) {
+            recentWrites.current.shift();
+        }
+    };
 
     React.useEffect(() => {
         const el = props.store.element as HTMLElement | undefined;
@@ -84,11 +98,11 @@ export function CameraView(props: ComponentProps<CameraViewProps>) {
 
     // An externally written playbackTime is a seek. Adjusted during render (not in an effect)
     // so the player mounts with the right target instead of loading a stale window first.
-    // Echoes of our own writes (late, or rounded by a binding) land within a couple of seconds
-    // of where playback is; only a real jump counts as a seek.
+    // Echoes of our own writes are recognised by value (recentWrites); one rounded by a binding
+    // lands within a couple of seconds of where playback is. Only a real jump counts as a seek.
     const propTime = toMs(p.playbackTime);
     const position = shown ?? seek.to;
-    if (p.mode === "playback" && propTime !== null && propTime !== lastWritten.current && propTime !== seek.to
+    if (p.mode === "playback" && propTime !== null && propTime !== seek.to && !recentWrites.current.includes(propTime)
         && Math.abs(propTime - position) > 2000) {
         setSeek({ to: propTime, nonce: seek.nonce + 1 });
         // bring the target into the fetched timeline range, or the player waits forever
@@ -102,7 +116,7 @@ export function CameraView(props: ComponentProps<CameraViewProps>) {
             setFollow(false);
             setViewEnd(Math.min(Date.now(), t + zoomMs / 2));
         }
-        lastWritten.current = Math.round(t);
+        noteWrite(Math.round(t));
         write("playbackTime", lastWritten.current);
         write("mode", "playback");
         setSeek(s => ({ to: t, nonce: s.nonce + 1 }));
@@ -163,7 +177,7 @@ export function CameraView(props: ComponentProps<CameraViewProps>) {
         setShown(t);
         // write back at most once a second so bindings see the position without flooding
         if (lastWritten.current === null || Math.abs(t - lastWritten.current) >= 1000) {
-            lastWritten.current = Math.round(t);
+            noteWrite(Math.round(t));
             props.store.props.write("playbackTime", lastWritten.current);
         }
         // keep the playhead in view while playing

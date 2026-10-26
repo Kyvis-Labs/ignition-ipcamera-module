@@ -10,7 +10,7 @@ The Camera Module provides support for:
 4. Timeline playback, bookmarks and event clips
 5. Low-latency HLS over the gateway's own port, or WebRTC for lower latency
 6. Transcoding to H.264 for browsers that cannot decode a camera's codec, or to save bandwidth
-7. Status tags in a tag provider called `Cameras`
+7. Status and ONVIF event tags in a tag provider called `Cameras`
 8. Scripting through `system.camera`
 
 Getting Started
@@ -57,7 +57,7 @@ Without a transcode, video is passed through as the camera sends it. A Camera Wa
 Camera names become part of the stream path and can only use letters, digits, `_`, `.` and `-`. A camera cannot be renamed because its recordings are stored by name.
 
 - **RTSP:** Enter the stream URLs and put the credentials in their own fields.
-- **ONVIF:** Enter the credentials and click `Fill Stream URLs from ONVIF`.
+- **ONVIF:** Enter the credentials and click `Fill Stream URLs from ONVIF`. `ONVIF Tags` keeps an event subscription open and exposes the camera's events as tags.
 - **UniFi Protect:** Enable RTSP on the camera in Protect. Use the `rtsps://...:7441/...` link and the certificate's SHA-256 fingerprint.
 
 Each camera has `viewRoles` and `playbackRoles`. If empty, anyone who can open a view showing the camera can see it.
@@ -134,6 +134,8 @@ The module creates a tag provider called `Cameras`.
 | `<camera>/Readers`, `<camera>/BytesReceived` | Stream usage |
 | `<camera>/Codecs`, `<camera>/LastError`, `<camera>/LastEventStart` | Stream details |
 | `<camera>/EventSourceOK`, `<camera>/EventSourceError` | ONVIF event subscription state |
+| `<camera>/Onvif/Device/...` | Manufacturer, model, firmware, serial and clock offset |
+| `<camera>/Onvif/Events/<topic>/...` | `Active`, `LastSeen` and `Data` for each topic the camera sends |
 
 In `EVENT` mode, put an alarm on `EventSourceOK = false` so you know if the camera's events stop.
 

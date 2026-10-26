@@ -26,7 +26,7 @@ class RecordingControllerTest {
 
     private static CameraConfig cfg(RecordMode mode, int pre, int post) {
         return new CameraConfig(CameraType.RTSP, "rtsp://h/x", "", "", null, "", "tcp", "", mode,
-            1, pre, post, 60, 30, List.of(), List.of(), List.of(), List.of(), List.of());
+            1, pre, post, 60, 30, List.of(), List.of(), List.of(), List.of(), List.of(), true);
     }
 
     private RecordingController controller(CameraConfig c, Clock clock) {

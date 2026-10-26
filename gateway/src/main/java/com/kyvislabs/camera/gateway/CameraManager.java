@@ -83,6 +83,13 @@ public class CameraManager {
         this.transcoder = transcoder;
     }
 
+    /** The gateway's health checks and metrics for the cameras; reads this manager's state back. */
+    private volatile CameraHealth health;
+
+    public void setHealth(CameraHealth health) {
+        this.health = health;
+    }
+
     public CameraManager(GatewayContext context, StatusTags tags, TokenService tokens) {
         this.context = context;
         this.tags = tags;
@@ -280,6 +287,9 @@ public class CameraManager {
         this.cameras = Map.copyOf(next);
         this.camerasLoaded = true;
         tags.syncCameras(next);
+        if (health != null) {
+            health.syncCameras(next);
+        }
         if (events != null) {
             events.sync(this.cameras);
         }
@@ -305,6 +315,17 @@ public class CameraManager {
     /** Runtime state of a camera's path from the last pass, or null. */
     public JsonObject runtime(String path) {
         return runtime.get(path);
+    }
+
+    /** Whether the last pass could talk to MediaMTX's API. */
+    public boolean serverReachable() {
+        return serverReachable;
+    }
+
+    /** Why MediaMTX refused this camera's main (or else sub) stream path on the last pass, or null. */
+    public String lastError(String camera) {
+        String main = lastError.get(PathConfigs.mainPath(camera));
+        return main != null ? main : lastError.get(PathConfigs.subPath(camera));
     }
 
     public void setRecordingNow(String camera, boolean on) {

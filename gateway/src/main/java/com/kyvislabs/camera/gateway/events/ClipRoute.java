@@ -106,6 +106,9 @@ public final class ClipRoute {
                 out.write(buf, 0, n);
                 left -= n;
             }
+        } catch (java.io.IOException e) {
+            // the browser went away mid-body (a seek, a new window, a closed tab): normal, and
+            // not the route error the platform would otherwise log with a stack trace
         }
     }
 }

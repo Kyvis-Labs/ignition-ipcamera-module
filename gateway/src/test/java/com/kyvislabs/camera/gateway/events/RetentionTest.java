@@ -48,7 +48,7 @@ class RetentionTest {
         });
         // TAG camera keeping events 2 days; bookmarks follow the same horizon outside CONTINUOUS
         svc.sync(Map.of("cam", new CameraConfig(CameraType.RTSP, "rtsp://h/x", "", "", null, "", "tcp", "",
-            RecordMode.TAG, 30, 10, 10, 60, 2, List.of(), List.of(), List.of(), List.of(), List.of())));
+            RecordMode.TAG, 30, 10, 10, 60, 2, List.of(), List.of(), List.of(), List.of(), List.of(), true)));
         long now = System.currentTimeMillis();
         EventStore store = svc.store();
         store.put(ev("old-event", CameraEvent.Kind.EVENT, now - 3 * DAY, false));

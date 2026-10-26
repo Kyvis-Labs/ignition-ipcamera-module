@@ -1,7 +1,6 @@
 package com.kyvislabs.camera.gateway;
 
 import java.nio.file.Path;
-import java.util.List;
 import java.util.Optional;
 
 import com.inductiveautomation.ignition.common.licensing.LicenseState;
@@ -19,16 +18,17 @@ import com.inductiveautomation.perspective.common.api.ComponentRegistry;
 import com.inductiveautomation.perspective.gateway.api.ComponentModelDelegateRegistry;
 import com.inductiveautomation.perspective.gateway.api.PerspectiveContext;
 import com.kyvislabs.camera.common.CameraModule;
-import com.kyvislabs.camera.common.CameraRpc;
 import com.kyvislabs.camera.common.CameraViewComponent;
 import com.kyvislabs.camera.common.CameraWallComponent;
 import com.kyvislabs.camera.gateway.auth.AuthRoute;
 import com.kyvislabs.camera.gateway.auth.TokenService;
 import com.kyvislabs.camera.gateway.config.CameraConfig;
 import com.kyvislabs.camera.gateway.config.MediaServerConfig;
-import com.kyvislabs.camera.gateway.config.TranscodeProfile;
 import com.kyvislabs.camera.gateway.events.ClipRoute;
 import com.kyvislabs.camera.gateway.events.EventService;
+import com.kyvislabs.camera.gateway.onvif.OnvifClient;
+import com.kyvislabs.camera.gateway.onvif.OnvifEvent;
+import com.kyvislabs.camera.gateway.onvif.OnvifEventSubscriber;
 import com.kyvislabs.camera.gateway.mediamtx.MediaMtxClient;
 import com.kyvislabs.camera.gateway.mediamtx.ProxyRoutes;
 import com.kyvislabs.camera.gateway.perspective.CameraComponentDelegate;
@@ -43,6 +43,7 @@ public class CameraGatewayHook extends AbstractGatewayModuleHook {
     private ComponentModelDelegateRegistry delegateRegistry;
 
     private StatusTags statusTags;
+    private CameraHealth health;
     private TokenService tokens;
     private CameraManager manager;
     private EventService events;
@@ -80,6 +81,8 @@ public class CameraGatewayHook extends AbstractGatewayModuleHook {
         statusTags = new StatusTags(context);
         tokens = new TokenService();
         manager = new CameraManager(context, statusTags, tokens);
+        health = new CameraHealth(context, manager);
+        manager.setHealth(health);
 
         serverHandler = SingletonResourceHandler.newBuilder(MediaServerConfig.META)
             .context(context)
@@ -117,6 +120,7 @@ public class CameraGatewayHook extends AbstractGatewayModuleHook {
             @Override
             public void eventSourceHealth(String camera, boolean ok, String error) {
                 statusTags.eventSource(camera, ok, error);
+                health.eventSource(camera, ok, error);
             }
 
             @Override
@@ -125,6 +129,26 @@ public class CameraGatewayHook extends AbstractGatewayModuleHook {
                 if (eventStartMs != null) {
                     statusTags.lastEventStart(camera, eventStartMs);
                 }
+            }
+
+            @Override
+            public OnvifEventSubscriber.Observer onvifObserver() {
+                return new OnvifEventSubscriber.Observer() {
+                    @Override
+                    public void connected(String camera, OnvifClient.DeviceInfo info, java.time.Duration clockOffset) {
+                        statusTags.onvifDevice(camera, info, clockOffset);
+                    }
+
+                    @Override
+                    public void event(String camera, OnvifEvent event) {
+                        statusTags.onvifEvent(camera, event);
+                    }
+
+                    @Override
+                    public void lost(String camera) {
+                        statusTags.onvifLost(camera);
+                    }
+                };
             }
         });
         manager.setEvents(events);
@@ -171,6 +195,9 @@ public class CameraGatewayHook extends AbstractGatewayModuleHook {
         if (manager != null) {
             manager.shutdown();
         }
+        if (health != null) {
+            health.shutdown();
+        }
         if (events != null) {
             events.shutdown();
         }
@@ -194,17 +221,8 @@ public class CameraGatewayHook extends AbstractGatewayModuleHook {
     /** The Designer's property editor asks for camera and profile names to suggest. */
     @Override
     public Optional<GatewayRpcImplementation> getRpcImplementation() {
-        return Optional.of(GatewayRpcImplementation.of(ProtoRpcSerializer.DEFAULT_INSTANCE, new CameraRpc() {
-            @Override
-            public List<String> cameraNames() {
-                return manager.cameras().keySet().stream().sorted().toList();
-            }
-
-            @Override
-            public List<String> profileNames() {
-                return manager.server().transcodeProfiles().stream().map(TranscodeProfile::name).toList();
-            }
-        }));
+        // a public class, not an anonymous one: the RPC delegate calls it by reflection
+        return Optional.of(GatewayRpcImplementation.of(ProtoRpcSerializer.DEFAULT_INSTANCE, new CameraRpcImpl(manager)));
     }
 
     @Override

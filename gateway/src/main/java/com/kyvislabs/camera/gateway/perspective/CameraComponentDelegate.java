@@ -239,30 +239,40 @@ public class CameraComponentDelegate extends ComponentModelDelegate {
                 String token = services.tokens().mint(Set.of(path), Set.of(TokenService.Action.PLAYBACK),
                     PLAYBACK_TTL, user);
                 s.addProperty("codecs", CameraManager.codecs(services.manager().runtime(path)));
-                CameraEvent clip = clipCovering(camera, startMs);
+                // MediaMTX's segments around the request: to step a start that falls in the seam
+                // between two segments onto the next one (see Timeline.snapStart), and to know
+                // whether MediaMTX still has this time at all.
+                List<MediaMtxClient.Span> near = segmentsNear(path, startMs);
+                long start = Timeline.snapStart(near, startMs, SEAM_MS);
+                boolean recorded = near.stream().anyMatch(sp -> Timeline.ceilMillis(sp.start()) <= start
+                    && start < sp.end().toEpochMilli());
+                CameraEvent clip = recorded ? null : clipCovering(camera, start);
                 TranscodeProfile tx = clip == null ? services.transcoder().forPlayback(camera, quality, accept, maxHeight) : null;
                 if (clip != null) {
                     // MediaMTX no longer has this (buffer expired); serve the exported clip, which
                     // starts at the clip part's start rather than the requested time
-                    CameraEvent.ClipPart part = clip.clipAt(startMs);
+                    CameraEvent.ClipPart part = clip.clipAt(start);
                     s.addProperty("url", "/data/camera/clip?camera=" + camera + "&id=" + clip.id()
                         + "&file=" + URLEncoder.encode(part.file(), StandardCharsets.UTF_8) + "&token=" + token);
                     s.addProperty("start", part.startMs());
                     s.addProperty("duration", (part.endMs() - part.startMs()) / 1000.0);
                 } else if (tx != null) {
                     double d = Math.min(duration, TranscodeRoute.MAX_WINDOW_SEC);
-                    s.addProperty("url", "/data/camera/transcode?camera=" + camera + "&start=" + startMs + "&duration=" + d
+                    s.addProperty("url", "/data/camera/transcode?camera=" + camera + "&start=" + start + "&duration=" + d
                         + "&profile=" + URLEncoder.encode(tx.name(), StandardCharsets.UTF_8) + "&token=" + token);
-                    s.addProperty("start", startMs);
+                    s.addProperty("start", start);
                     s.addProperty("duration", d);
                     s.addProperty("transcoded", tx.name());
                     s.addProperty("codecs", "H264, MPEG-4 Audio");
                 } else {
-                    s.addProperty("url", services.manager().playbackUrl("get", "path=" + path
-                        + "&start=" + URLEncoder.encode(Instant.ofEpochMilli(startMs).toString(), StandardCharsets.UTF_8)
-                        + "&duration=" + duration + "&format=mp4&token=" + token));
-                    s.addProperty("start", startMs);
-                    s.addProperty("duration", duration);
+                    // as recorded, but through the gateway's cache: served with a length and byte
+                    // ranges, which a browser needs to start a window with audio before it has all
+                    // of it, and to seek within it
+                    double d = Math.min(duration, TranscodeService.MAX_COPY_WINDOW_SEC);
+                    s.addProperty("url", "/data/camera/window?camera=" + camera + "&start=" + start + "&duration=" + d
+                        + "&token=" + token);
+                    s.addProperty("start", start);
+                    s.addProperty("duration", d);
                 }
             }
             out.add(camera, s);
@@ -270,17 +280,25 @@ public class CameraComponentDelegate extends ComponentModelDelegate {
         res.add("streams", out);
     }
 
+    /** Longest seam between two of MediaMTX's segments that a playback start is stepped across. */
+    private static final long SEAM_MS = 1500;
+
+    /** MediaMTX's recording segments overlapping [t - 1 s, t + SEAM_MS + 1 s]; empty when it cannot say. */
+    private List<MediaMtxClient.Span> segmentsNear(String path, long t) {
+        try {
+            return services.manager().client().listRecordings(path, Instant.ofEpochMilli(t - 1000),
+                Instant.ofEpochMilli(t + SEAM_MS + 1000));
+        } catch (Exception e) {
+            log.debugf("recording lookup failed for %s: %s", path, e.getMessage());
+            return List.of();
+        }
+    }
+
     /**
-     * The exported clip containing t, but only when MediaMTX itself has nothing at t: live
-     * recordings are preferred because they run past the clip's end.
+     * The exported clip containing t, for a time MediaMTX itself no longer has (buffer expired).
      */
     private CameraEvent clipCovering(String camera, long t) {
         try {
-            List<MediaMtxClient.Span> live = services.manager().client().listRecordings(
-                PathConfigs.mainPath(camera), Instant.ofEpochMilli(t - 1000), Instant.ofEpochMilli(t + 1000));
-            if (live.stream().anyMatch(sp -> !sp.start().isAfter(Instant.ofEpochMilli(t)) && sp.end().isAfter(Instant.ofEpochMilli(t)))) {
-                return null;
-            }
             for (CameraEvent ev : services.events().list(camera, t - 1, t + 1)) {
                 if (ev.clipAt(t) != null) {
                     return ev;

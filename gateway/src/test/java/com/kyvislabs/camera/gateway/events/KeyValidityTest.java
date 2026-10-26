@@ -14,7 +14,7 @@ import org.junit.jupiter.api.Test;
 class KeyValidityTest {
     private static CameraConfig cfg(RecordMode mode, List<TagTrigger> triggers) {
         return new CameraConfig(CameraType.RTSP, "rtsp://h/x", "", "", null, "", "tcp", "", mode,
-            1, 10, 10, 60, 30, List.of(), triggers, List.of(), List.of(), List.of());
+            1, 10, 10, 60, 30, List.of(), triggers, List.of(), List.of(), List.of(), true);
     }
 
     @Test

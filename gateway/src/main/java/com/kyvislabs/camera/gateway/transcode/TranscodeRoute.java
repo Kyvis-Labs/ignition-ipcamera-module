@@ -21,6 +21,10 @@ import jakarta.servlet.http.HttpServletResponse;
  * window transcoded to H.264 at a profile, as a seekable MP4. The request waits while the window
  * is transcoded (the player shows it loading); repeats are served from the cache. Authorised by
  * the camera's playback token, like the recordings themselves.
+ *
+ * <p>{@code GET /data/camera/window?camera=&start=&duration=&token=} -- one recording window as
+ * recorded, copied through the cache so it is served with a length and byte ranges (see
+ * {@link TranscodeService#window}).
  */
 public final class TranscodeRoute {
     private static final LoggerEx log = LoggerEx.newBuilder().build("camera.Transcode");
@@ -65,6 +69,42 @@ public final class TranscodeRoute {
                     return null;
                 } catch (Exception e) {
                     log.warnf("Transcode of %s at %d failed: %s", camera, start, e.getMessage());
+                    res.setStatus(HttpServletResponse.SC_BAD_GATEWAY);
+                    return null;
+                }
+                ClipRoute.serve(file, req.getRequest().getHeader("Range"), res);
+                return null;
+            })
+            .mount();
+
+        routes.newRoute("/window")
+            .method(HttpMethod.GET)
+            .accessControl(AccessControlStrategy.OPEN_ROUTE)
+            .handler((req, res) -> {
+                String camera = req.getParameter("camera");
+                if (camera == null || !CameraConfig.NAME.matcher(camera).matches()
+                    || !tokens.allows(req.getParameter("token"), PathConfigs.mainPath(camera), TokenService.Action.PLAYBACK)) {
+                    res.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                    return null;
+                }
+                long start;
+                double duration;
+                try {
+                    start = Long.parseLong(req.getParameter("start"));
+                    duration = Math.min(TranscodeService.MAX_COPY_WINDOW_SEC, Double.parseDouble(req.getParameter("duration")));
+                } catch (RuntimeException e) {
+                    res.setStatus(HttpServletResponse.SC_BAD_REQUEST);
+                    return null;
+                }
+                if (duration <= 0) {
+                    res.setStatus(HttpServletResponse.SC_BAD_REQUEST);
+                    return null;
+                }
+                Path file;
+                try {
+                    file = service.get().window(camera, start, duration);
+                } catch (Exception e) {
+                    log.warnf("Recording window of %s at %d failed: %s", camera, start, e.getMessage());
                     res.setStatus(HttpServletResponse.SC_BAD_GATEWAY);
                     return null;
                 }

@@ -225,6 +225,8 @@ public record MediaServerConfig(
         .description("The MediaMTX server that ingests, records and serves camera video.")
         .defaultConfig(DEFAULT)
         .buildRouteDelegate(r -> r.configSchema(MediaServerConfig.class).openApiTagName("Cameras"))
+        // Whether MediaMTX is reachable, on the singleton's resource API entry (registered by CameraHealth).
+        .buildStatusDelegate(s -> s.instanceHealthCheck("status", "camera.media-server.status"))
         .buildValidator((c, v) -> {
             v.requireNotEmpty("apiUrl", c.apiUrl());
             v.requireNotEmpty("playbackUrl", c.playbackUrl());

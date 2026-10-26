@@ -7,7 +7,7 @@
       "items": {
         "type": "object",
         "properties": {
-          "camera": {"type": "string"},
+          "camera": {"type": "string", "description": "A configured camera; the dropdown lists the gateway's cameras.", "extension": {"suggestion-source": "camera.cameras"}},
           "label": {"type": "string", "description": "Shown instead of the camera name."}
         }
       },

@@ -87,6 +87,33 @@ class OnvifParsingTest {
     }
 
     @Test
+    void observerSeesEveryNotificationAndLoss() throws Exception {
+        List<String> seen = new java.util.ArrayList<>();
+        OnvifEventSubscriber s = new OnvifEventSubscriber("cam", null, List.of("motion"),
+            (cam, key, label, on) -> { }, (cam, ok, err) -> { });
+        s.setObserver(new OnvifEventSubscriber.Observer() {
+            @Override
+            public void event(String camera, OnvifEvent e) {
+                seen.add(camera + ":" + e.tagPath() + ":" + e.active() + ":" + e.dataString());
+            }
+        });
+        for (OnvifEvent e : OnvifEvent.parse(Soap.parse(PULL))) {
+            s.handle(e);
+        }
+        assertEquals(List.of("cam:RuleEngine/CellMotionDetector/Motion:true:IsMotion=true",
+            "cam:Device/Trigger/DigitalInput:false:LogicalState=false"), seen, "non-matching topics reach the observer too");
+    }
+
+    @Test
+    void topicsBecomeTagFolders() {
+        assertEquals("VideoSource/DayNightVision",
+            new OnvifEvent("tns1:VideoSource/tnsaxis:DayNightVision", "", java.util.Map.of(), java.util.Map.of()).tagPath(),
+            "a namespace prefix on an inner segment is dropped too");
+        assertEquals("RuleEngine/Cell_Motion", new OnvifEvent("RuleEngine/Cell.Motion", "", java.util.Map.of(), java.util.Map.of()).tagPath());
+        assertEquals("Event", new OnvifEvent("", "", java.util.Map.of(), java.util.Map.of()).tagPath());
+    }
+
+    @Test
     void faultsAreReported() throws Exception {
         String fault = """
             <s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Body><s:Fault>
