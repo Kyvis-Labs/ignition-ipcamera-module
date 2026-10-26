@@ -1,9 +1,11 @@
 package com.kyvislabs.camera.gateway;
 
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Optional;
 
 import com.inductiveautomation.ignition.common.licensing.LicenseState;
+import com.inductiveautomation.ignition.common.rpc.proto.ProtoRpcSerializer;
 import com.inductiveautomation.ignition.common.script.ScriptManager;
 import com.inductiveautomation.ignition.common.util.LoggerEx;
 import com.inductiveautomation.ignition.gateway.config.NamedResourceHandler;
@@ -11,23 +13,27 @@ import com.inductiveautomation.ignition.gateway.config.SingletonResourceHandler;
 import com.inductiveautomation.ignition.gateway.dataroutes.RouteGroup;
 import com.inductiveautomation.ignition.gateway.model.AbstractGatewayModuleHook;
 import com.inductiveautomation.ignition.gateway.model.GatewayContext;
+import com.inductiveautomation.ignition.gateway.rpc.GatewayRpcImplementation;
 import com.inductiveautomation.ignition.gateway.web.systemjs.SystemJsModule;
 import com.inductiveautomation.perspective.common.api.ComponentRegistry;
 import com.inductiveautomation.perspective.gateway.api.ComponentModelDelegateRegistry;
 import com.inductiveautomation.perspective.gateway.api.PerspectiveContext;
 import com.kyvislabs.camera.common.CameraModule;
+import com.kyvislabs.camera.common.CameraRpc;
 import com.kyvislabs.camera.common.CameraViewComponent;
 import com.kyvislabs.camera.common.CameraWallComponent;
 import com.kyvislabs.camera.gateway.auth.AuthRoute;
-import com.kyvislabs.camera.gateway.transcode.TranscodeRoute;
-import com.kyvislabs.camera.gateway.transcode.TranscodeService;
 import com.kyvislabs.camera.gateway.auth.TokenService;
 import com.kyvislabs.camera.gateway.config.CameraConfig;
 import com.kyvislabs.camera.gateway.config.MediaServerConfig;
+import com.kyvislabs.camera.gateway.config.TranscodeProfile;
 import com.kyvislabs.camera.gateway.events.ClipRoute;
 import com.kyvislabs.camera.gateway.events.EventService;
 import com.kyvislabs.camera.gateway.mediamtx.MediaMtxClient;
+import com.kyvislabs.camera.gateway.mediamtx.ProxyRoutes;
 import com.kyvislabs.camera.gateway.perspective.CameraComponentDelegate;
+import com.kyvislabs.camera.gateway.transcode.TranscodeRoute;
+import com.kyvislabs.camera.gateway.transcode.TranscodeService;
 
 public class CameraGatewayHook extends AbstractGatewayModuleHook {
     private static final LoggerEx log = LoggerEx.newBuilder().build("camera.GatewayHook");
@@ -182,6 +188,23 @@ public class CameraGatewayHook extends AbstractGatewayModuleHook {
         AdminRoutes.mount(routes, () -> services);
         ClipRoute.mount(routes, () -> events.store(), tokens);
         TranscodeRoute.mount(routes, () -> transcoder, manager::server, tokens);
+        ProxyRoutes.mount(routes, manager::server, tokens);
+    }
+
+    /** The Designer's property editor asks for camera and profile names to suggest. */
+    @Override
+    public Optional<GatewayRpcImplementation> getRpcImplementation() {
+        return Optional.of(GatewayRpcImplementation.of(ProtoRpcSerializer.DEFAULT_INSTANCE, new CameraRpc() {
+            @Override
+            public List<String> cameraNames() {
+                return manager.cameras().keySet().stream().sorted().toList();
+            }
+
+            @Override
+            public List<String> profileNames() {
+                return manager.server().transcodeProfiles().stream().map(TranscodeProfile::name).toList();
+            }
+        }));
     }
 
     @Override

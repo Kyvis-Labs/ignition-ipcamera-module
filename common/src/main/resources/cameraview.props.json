@@ -3,7 +3,7 @@
   "properties": {
     "camera": {
       "type": "string",
-      "description": "Name of a camera configured on the gateway (Config > Cameras, or /data/api/v1/resources/.../com.kyvislabs.camera/camera).",
+      "description": "The configured camera to show. The dropdown lists the gateway's cameras; any name or binding works.",
       "default": ""
     },
     "mode": {
@@ -26,7 +26,43 @@
     },
     "quality": {
       "type": "string",
-      "description": "Which stream to show: auto (the substream when the component is 720px wide or less), main, sub, or the name of a transcode profile set on the gateway (e.g. 720p) to watch and play back at that size. A stream this browser cannot decode is transcoded automatically.",
+      "description": "Which stream to show: auto (the substream when the component is 720px wide or less), main, sub, a transcode profile set on the gateway (e.g. 720p), or custom (the size and bitrate in customQuality). A transcode applies to live video and playback. A stream this browser cannot decode is transcoded automatically.",
+      "default": "auto",
+      "suggestions": {
+        "Automatic": "auto",
+        "Main stream": "main",
+        "Substream": "sub",
+        "Custom (customQuality)": "custom"
+      }
+    },
+    "customQuality": {
+      "type": "object",
+      "description": "Used when quality is custom: the video is transcoded to this height and bitrate.",
+      "properties": {
+        "height": {
+          "type": "number",
+          "description": "Height in pixels, 120-2160; never above the camera's own.",
+          "default": 540
+        },
+        "bitrateKbps": {
+          "type": "number",
+          "description": "Video bitrate in kbit/s, 100-20000.",
+          "default": 1200
+        }
+      },
+      "default": {
+        "height": 540,
+        "bitrateKbps": 1200
+      }
+    },
+    "transport": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "hls",
+        "webrtc"
+      ],
+      "description": "Live video transport. auto uses the gateway's default; hls is low-latency HLS through the gateway's own port (about 1-2 s behind); webrtc is about 0.2-0.5 s behind but needs the media port reachable, and falls back to HLS when it is not.",
       "default": "auto"
     },
     "muted": {

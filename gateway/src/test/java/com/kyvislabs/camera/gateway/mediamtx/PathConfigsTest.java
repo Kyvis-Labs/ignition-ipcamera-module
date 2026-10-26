@@ -119,9 +119,11 @@ class PathConfigsTest {
     @Test
     void transcodePathsPerProfileAndSource() {
         Map<String, JsonObject> d = PathConfigs.desired("front", cam(RecordMode.CONTINUOUS, 10, "rtsp://192.0.2.5/sub"), null,
-            SERVER, false, "transcoder:tok");
+            SERVER, false,
+            new PathConfigs.Transcoder("ffmpeg", "transcoder:tok"));
         assertEquals(List.of("cam/front", "cam/front/sub", "cam/front/tx/1080p", "cam/front/sub/tx/1080p",
-            "cam/front/tx/720p", "cam/front/sub/tx/720p", "cam/front/tx/480p", "cam/front/sub/tx/480p"), List.copyOf(d.keySet()));
+            "cam/front/tx/720p", "cam/front/sub/tx/720p", "cam/front/tx/480p", "cam/front/sub/tx/480p",
+            "~^cam/front/tx/c(\\d+)-(\\d+)$", "~^cam/front/sub/tx/c(\\d+)-(\\d+)$"), List.copyOf(d.keySet()));
         JsonObject tx = d.get("cam/front/sub/tx/720p");
         assertEquals("publisher", tx.get("source").getAsString());
         assertEquals("10s", tx.get("runOnDemandCloseAfter").getAsString());
@@ -135,11 +137,38 @@ class PathConfigsTest {
 
     @Test
     void noTranscodePathsWhenDisabled() {
-        MediaServerConfig off = new MediaServerConfig(SERVER.apiUrl(), SERVER.playbackUrl(), SERVER.publicUrl(), "", null, null, "",
-            15, 10, "/data/rec/", false, 2, null, null, null, null, null, null);
-        Map<String, JsonObject> d = PathConfigs.desired("front", cam(RecordMode.CONTINUOUS, 10, ""), null, off, false, "t:t");
+        MediaServerConfig off = new MediaServerConfig(null, null, null, null, null, null, null, null,
+            SERVER.apiUrl(), SERVER.playbackUrl(), null, SERVER.publicUrl(), "", null, null, "",
+            15, 10, "/data/rec/", false, 2, null, null, null, null, null, null, null, null, null);
+        Map<String, JsonObject> d = PathConfigs.desired("front", cam(RecordMode.CONTINUOUS, 10, ""), null, off, false,
+            new PathConfigs.Transcoder("ffmpeg", "t:t"));
         assertEquals(List.of("cam/front"), List.copyOf(d.keySet()));
         assertEquals("/data/rec/%path/%Y-%m-%d_%H-%M-%S-%f", d.get("cam/front").get("recordPath").getAsString());
+    }
+
+    @Test
+    void embeddedTranscodesRunTheGatewaysFfmpeg() {
+        Map<String, JsonObject> d = PathConfigs.desired("front", cam(RecordMode.CONTINUOUS, 10, ""), null,
+            SERVER.embeddedEndpoints("C:\\data\\rec"), false, new PathConfigs.Transcoder("C:\\ffmpeg\\ffmpeg.exe", "t:t"));
+        assertTrue(d.get("cam/front/tx/720p").get("runOnDemand").getAsString().startsWith("'C:\\ffmpeg\\ffmpeg.exe' "));
+        assertEquals("C:\\data\\rec/%path/%Y-%m-%d_%H-%M-%S-%f", d.get("cam/front").get("recordPath").getAsString());
+    }
+
+    @Test
+    void customSizesShareOnePatternPathPerSource() {
+        Map<String, JsonObject> d = PathConfigs.desired("front.door", cam(RecordMode.CONTINUOUS, 10, "rtsp://192.0.2.5/sub"), null,
+            SERVER, false, new PathConfigs.Transcoder("ffmpeg", "t:t"));
+        String main = "~^cam/front\\.door/tx/c(\\d+)-(\\d+)$";
+        String sub = "~^cam/front\\.door/sub/tx/c(\\d+)-(\\d+)$";
+        assertTrue(d.containsKey(main) && d.containsKey(sub), d.keySet().toString());
+        String cmd = d.get(main).get("runOnDemand").getAsString();
+        assertTrue(cmd.contains("/cam/front.door -map"), cmd);
+        assertTrue(cmd.contains(" -b:v '${G2}k' -maxrate '${G2}k' "), cmd);
+        assertTrue(cmd.contains("min(${G1},ih)"), cmd);
+        assertEquals("front.door", PathConfigs.cameraOf(main));
+        assertEquals("front.door", PathConfigs.cameraOf(sub));
+        assertEquals("/v3/x/%7E%5Ecam/front.door/tx/c%28%5Cd%2B%29-%28%5Cd%2B%29%24",
+            "/v3/x/" + MediaMtxClient.encPath("~^cam/front.door/tx/c(\\d+)-(\\d+)$"));
     }
 
     @Test

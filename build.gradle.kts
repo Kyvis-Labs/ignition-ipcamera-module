@@ -17,12 +17,22 @@ allprojects {
     group = "com.kyvislabs.camera"
 }
 
+// `-Pplatform=...` builds a variant with MediaMTX inside (see gateway/build.gradle.kts).
+val platform = (findProperty("platform") as String?)?.takeIf { it.isNotBlank() }
+val platformLabel = mapOf(
+    "linux-x64" to "Linux x64", "linux-arm64" to "Linux ARM64",
+    "windows-x64" to "Windows x64", "macos-arm64" to "macOS Apple silicon",
+)
+
 ignitionModule {
-    fileName.set("Camera")
+    fileName.set(if (platform == null) "Camera" else "Camera-$platform")
     name.set("Camera")
     id.set("com.kyvislabs.camera")
     moduleVersion.set("${project.version}")
-    moduleDescription.set("IP camera live view, recording and playback for Perspective, backed by MediaMTX.")
+    moduleDescription.set(
+        "IP camera live view, recording and playback for Perspective, backed by MediaMTX. "
+            + if (platform == null) "Uses an external MediaMTX."
+            else "Includes MediaMTX for ${platformLabel[platform] ?: platform}.")
     requiredIgnitionVersion.set("8.3.9")
     license.set("license.html")
 

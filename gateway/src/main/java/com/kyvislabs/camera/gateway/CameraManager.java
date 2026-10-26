@@ -1,5 +1,7 @@
 package com.kyvislabs.camera.gateway;
 
+import java.io.IOException;
+import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -23,6 +25,7 @@ import com.kyvislabs.camera.gateway.auth.TokenService;
 import com.kyvislabs.camera.gateway.config.CameraConfig;
 import com.kyvislabs.camera.gateway.events.EventService;
 import com.kyvislabs.camera.gateway.config.MediaServerConfig;
+import com.kyvislabs.camera.gateway.mediamtx.EmbeddedMediaServer;
 import com.kyvislabs.camera.gateway.mediamtx.MediaMtxClient;
 import com.kyvislabs.camera.gateway.mediamtx.PathConfigs;
 
@@ -58,6 +61,16 @@ public class CameraManager {
 
     private final TokenService tokens;
     private volatile String callbackKey;
+
+    /** The MediaMTX in this build of the module, if any, and whether it runs on this host. */
+    private final Optional<EmbeddedMediaServer.Bundle> bundle = EmbeddedMediaServer.bundled();
+    private EmbeddedMediaServer embedded;
+    private volatile boolean embeddedActive;
+    private volatile String modeError;
+    /** Whether the gateway's ffmpeg runs; null until checked. */
+    private volatile Boolean ffmpegAvailable;
+    /** Why the configured encoder fails a test encode on the gateway, or null. */
+    private volatile String encoderError;
     private volatile EventService events;
 
     public void setEvents(EventService events) {
@@ -85,23 +98,171 @@ public class CameraManager {
         scheduleReconcile();
     }
 
-    public void shutdown() {
+    public synchronized void shutdown() {
         context.getExecutionManager().unRegister(CameraModule.MODULE_ID, TASK);
+        if (embedded != null) {
+            embedded.stop();
+        }
     }
 
     public synchronized void setServer(MediaServerConfig config) {
         boolean intervalChanged = !config.reconcileIntervalSec().equals(server.reconcileIntervalSec());
-        this.server = config;
-        this.client = new MediaMtxClient(config.apiUrl(), config.playbackUrl(), config.apiUsername(),
-            reveal(config.apiPassword(), "media server API password"), tokens::serviceToken);
-        this.callbackKey = reveal(config.authCallbackKey(), "media server auth callback key");
-        if (callbackKey == null) {
-            log.warn("No authCallbackKey on the media server config: every browser stream will be refused");
+        boolean usable = bundle.isPresent() && bundle.get().platform().equals(EmbeddedMediaServer.hostPlatform());
+        boolean wantEmbedded = switch (config.serverMode()) {
+            case EMBEDDED -> true;
+            case EXTERNAL -> false;
+            default -> usable;
+        };
+        modeError = null;
+        MediaServerConfig effective = config;
+        if (wantEmbedded && !usable) {
+            modeError = bundle.isEmpty()
+                ? "this build of the module has no MediaMTX; install a platform build or use an external MediaMTX"
+                : "this build bundles MediaMTX for " + bundle.get().platform() + ", not this host ("
+                    + System.getProperty("os.name") + " " + System.getProperty("os.arch") + ")";
+            log.error("Embedded media server unavailable: " + modeError);
         }
+        if (wantEmbedded && usable) {
+            Path data = context.getSystemManager().getDataDir().toPath().toAbsolutePath();
+            Path recordings = config.embeddedRecordingsPath().isEmpty()
+                ? data.resolve("camera").resolve("recordings") : Path.of(config.embeddedRecordingsPath());
+            if (embedded == null) {
+                embedded = new EmbeddedMediaServer(bundle.get(), data, this::triggerReconcile);
+            }
+            try {
+                embedded.apply(config, context.getWebResourceManager().getHttpPort(), recordings);
+            } catch (IOException e) {
+                modeError = e.getMessage();
+                log.error("Embedded media server failed to start: " + e.getMessage());
+            }
+            effective = config.embeddedEndpoints(recordings.toAbsolutePath().toString());
+            this.callbackKey = embedded.callbackKey();
+        } else {
+            if (embedded != null) {
+                embedded.stop();
+                embedded = null;
+            }
+            this.callbackKey = reveal(config.authCallbackKey(), "media server auth callback key");
+            if (callbackKey == null) {
+                log.warn("No authCallbackKey on the media server config: every browser stream will be refused");
+            }
+        }
+        this.embeddedActive = wantEmbedded;
+        this.server = effective;
+        this.client = new MediaMtxClient(effective.apiUrl(), effective.playbackUrl(), effective.apiUsername(),
+            wantEmbedded ? null : reveal(config.apiPassword(), "media server API password"), tokens::serviceToken);
+        checkFfmpeg(config);
         if (intervalChanged) {
             scheduleReconcile();
         }
         triggerReconcile();
+    }
+
+    /**
+     * Off-thread: whether the gateway's ffmpeg runs, and whether the configured encoder works
+     * with it. Transcodes that need either wait on the result.
+     */
+    private void checkFfmpeg(MediaServerConfig config) {
+        String ffmpeg = config.ffmpegPath();
+        context.getExecutionManager().executeOnce(() -> {
+            boolean ok = run(List.of(ffmpeg, "-version")).ok();
+            String encoder = null;
+            if (ok && config.transcodeEnabled()) {
+                Run test = run(com.kyvislabs.camera.gateway.transcode.Ffmpeg.encoderTest(config));
+                if (!test.ok()) {
+                    // ffmpeg's first complaint names the cause ("Device creation failed: -22.")
+                    String first = test.output().strip().lines().filter(l -> !l.startsWith("libva info"))
+                        .findFirst().orElse("");
+                    encoder = "the " + config.transcodeEncoder() + " encoder does not work on this gateway"
+                        + (first.isEmpty() ? "" : " (" + first + ")");
+                }
+            }
+            if (!java.util.Objects.equals(encoder, encoderError) && encoder != null) {
+                log.warn("Transcoding unavailable: " + encoder);
+            }
+            encoderError = encoder;
+            if (!Boolean.valueOf(ok).equals(ffmpegAvailable)) {
+                if (ok) {
+                    log.infof("ffmpeg found (%s)", ffmpeg);
+                } else {
+                    log.warnf("ffmpeg not found at '%s': transcoding recordings%s is unavailable", ffmpeg,
+                        embeddedActive ? " and live streams" : "");
+                }
+            }
+            ffmpegAvailable = ok;
+            triggerReconcile();
+        });
+    }
+
+    /** Whether MediaMTX is the bundled one, run by the gateway. */
+    public boolean embeddedActive() {
+        return embeddedActive;
+    }
+
+    public Optional<EmbeddedMediaServer> embedded() {
+        return Optional.ofNullable(embedded);
+    }
+
+    public Optional<EmbeddedMediaServer.Bundle> bundle() {
+        return bundle;
+    }
+
+    /** Why the configured media server cannot run, or null. */
+    public String modeError() {
+        return modeError;
+    }
+
+    public Boolean ffmpegAvailable() {
+        return ffmpegAvailable;
+    }
+
+    public String encoderError() {
+        return encoderError;
+    }
+
+    private record Run(boolean ok, String output) {
+    }
+
+    /** Runs a short command: whether it exited 0 within 20 s, and what it printed. */
+    private static Run run(List<String> cmd) {
+        try {
+            ProcessBuilder pb = new ProcessBuilder(cmd).redirectErrorStream(true);
+            com.kyvislabs.camera.gateway.transcode.Ffmpeg.quietGpuDrivers(pb.environment());
+            Process p = pb.start();
+            String out = new String(p.getInputStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+            return new Run(p.waitFor(20, java.util.concurrent.TimeUnit.SECONDS) && p.exitValue() == 0, out);
+        } catch (Exception e) {
+            return new Run(false, String.valueOf(e.getMessage()));
+        }
+    }
+
+    /** Live transcodes: an external MediaMTX has its own ffmpeg; an embedded one uses the gateway's. */
+    public boolean liveTranscodes() {
+        return server.transcodeEnabled() && (!embeddedActive || Boolean.TRUE.equals(ffmpegAvailable) && encoderError == null);
+    }
+
+    /** Recording transcodes always run on the gateway. */
+    public boolean playbackTranscodes() {
+        return server.transcodeEnabled() && Boolean.TRUE.equals(ffmpegAvailable) && encoderError == null;
+    }
+
+    /** A browser's WHEP URL: MediaMTX's public address, or the gateway's proxy. */
+    public String whepUrl(String path, String token) {
+        return server.proxied()
+            ? "/data/camera/whep?path=" + path + "&token=" + token
+            : server.publicUrl() + "/" + path + "/whep?token=" + token;
+    }
+
+    /** A browser's low-latency HLS URL: always through the gateway's proxy. */
+    public String hlsUrl(String path, String token) {
+        return "/data/camera/hls?path=" + path + "&file=index.m3u8&token=" + token;
+    }
+
+    /** A browser's URL on MediaMTX's playback server ({@code list} or {@code get}). */
+    public String playbackUrl(String endpoint, String query) {
+        return server.proxied()
+            ? "/data/camera/playback/" + endpoint + "?" + query
+            : server.publicUrl() + "/" + endpoint + "?" + query;
     }
 
     public void setCameras(List<DecodedResource<CameraConfig>> resources) {
@@ -187,12 +348,13 @@ public class CameraManager {
 
         Map<String, JsonObject> desired = new LinkedHashMap<>();
         Map<String, String> pathOwner = new HashMap<>();
-        String transcoderAuth = server.transcodeEnabled() ? TokenService.TRANSCODER + ":" + tokens.transcoderToken() : null;
+        PathConfigs.Transcoder transcoder = liveTranscodes() ? new PathConfigs.Transcoder(
+            embeddedActive ? server.ffmpegPath() : "ffmpeg", TokenService.TRANSCODER + ":" + tokens.transcoderToken()) : null;
         for (Map.Entry<String, CameraConfig> e : cams.entrySet()) {
             String name = e.getKey();
             CameraConfig cfg = e.getValue();
             String pw = reveal(cfg.password(), "password for camera '" + name + "'");
-            PathConfigs.desired(name, cfg, pw, server, recordingNow.contains(name), transcoderAuth).forEach((p, conf) -> {
+            PathConfigs.desired(name, cfg, pw, server, recordingNow.contains(name), transcoder).forEach((p, conf) -> {
                 desired.put(p, conf);
                 pathOwner.put(p, name);
             });
@@ -222,7 +384,12 @@ public class CameraManager {
             try {
                 if (have == null) {
                     c.addPath(path, e.getValue());
-                    log.infof("Added path %s", path);
+                    // transcode paths are on-demand definitions, a dozen per camera: not news
+                    if (PathConfigs.isTranscode(path)) {
+                        log.debugf("Added path %s", path);
+                    } else {
+                        log.infof("Added path %s", path);
+                    }
                 } else if (!PathConfigs.matches(e.getValue(), have)) {
                     // replace, not patch: a key dropped from the desired config must revert too
                     c.replacePath(path, e.getValue());

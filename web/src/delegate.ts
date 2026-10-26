@@ -48,27 +48,38 @@ export class CameraDelegate extends ComponentStoreDelegate {
     }
 }
 
+/** "auto" leaves the choice to the gateway's default. */
+export type TransportPref = "auto" | "hls" | "webrtc";
+
 /**
- * Resolves a camera's WHEP URL through the delegate.
+ * Resolves a camera's live stream through the delegate.
  *
  * @param quality   "main", "sub", or a transcode profile name (e.g. "720p")
  * @param maxHeight the viewer's height in device pixels; sizes a transcode the gateway makes
  *                  because this browser cannot decode the camera's codec
  */
-export async function liveUrl(delegate: CameraDelegate, camera: string, quality: string, maxHeight = 0): Promise<LiveStream> {
-    const res = await delegate.request("live", { cameras: [{ camera, quality, maxHeight }], accept: webrtcCodecs() });
-    const s = res.streams?.[camera];
+export async function liveUrl(delegate: CameraDelegate, camera: string, quality: string, maxHeight = 0,
+                              transport: TransportPref = "auto"): Promise<LiveStream> {
+    const res = await delegate.request("live", {
+        cameras: [{ camera, quality, maxHeight }], transport, accept: webrtcCodecs(), acceptMedia: mediaCodecs(),
+    });
+    return stream(camera, res.streams?.[camera]);
+}
+
+/** A live stream to connect to: its URL, transport and, when the gateway transcodes it, the profile. */
+export interface LiveStream {
+    url: string;
+    transport: "hls" | "webrtc";
+    transcoded: string | null;
+}
+
+/** One camera's entry of a live response, or the error it carries. */
+export function stream(camera: string, s: any): LiveStream {
     if (!s || s.error) {
         throw new Error(s?.error ?? "no stream");
     }
     lastCodecs.set(camera, s.codecs ?? "");
-    return { url: s.whep, transcoded: s.transcoded ?? null };
-}
-
-/** A live stream to connect to: its WHEP URL and, when the gateway transcodes it, the profile. */
-export interface LiveStream {
-    url: string;
-    transcoded: string | null;
+    return { url: s.url ?? s.whep, transport: s.transport === "hls" ? "hls" : "webrtc", transcoded: s.transcoded ?? null };
 }
 
 /** Codecs the gateway last reported per camera, for explaining playback failures. */

@@ -15,6 +15,7 @@ import com.inductiveautomation.ignition.gateway.dataroutes.RouteHandler;
 import com.kyvislabs.camera.gateway.auth.TokenService;
 import com.kyvislabs.camera.gateway.config.CameraConfig;
 import com.kyvislabs.camera.gateway.events.CameraEvent;
+import com.kyvislabs.camera.gateway.mediamtx.EmbeddedMediaServer;
 import com.kyvislabs.camera.gateway.mediamtx.PathConfigs;
 import com.kyvislabs.camera.gateway.onvif.OnvifDiscovery;
 import com.kyvislabs.camera.gateway.onvif.OnvifProbe;
@@ -95,14 +96,14 @@ public final class AdminRoutes {
                 String token = services.tokens().mint(Set.of(path),
                     Set.of(playback ? TokenService.Action.PLAYBACK : TokenService.Action.READ),
                     Duration.ofSeconds(ttl), req.getActor());
-                String base = services.manager().server().publicUrl();
                 JsonObject out = new JsonObject();
                 out.addProperty("path", path);
                 out.addProperty("token", token);
                 if (playback) {
-                    out.addProperty("list", base + "/list?path=" + path + "&token=" + token);
+                    out.addProperty("list", services.manager().playbackUrl("list", "path=" + path + "&token=" + token));
                 } else {
-                    out.addProperty("whep", base + "/" + path + "/whep?token=" + token);
+                    out.addProperty("whep", services.manager().whepUrl(path, token));
+                    out.addProperty("hls", services.manager().hlsUrl(path, token));
                 }
                 return out;
             })
@@ -245,14 +246,43 @@ public final class AdminRoutes {
         });
         out.add("cameras", cams);
         out.addProperty("mediaServer", m.server().apiUrl());
+        JsonObject server = new JsonObject();
+        server.addProperty("mode", m.embeddedActive() ? "embedded" : "external");
+        server.addProperty("proxied", m.server().proxied());
+        server.addProperty("hostPlatform", String.valueOf(EmbeddedMediaServer.hostPlatform()));
+        m.bundle().ifPresent(b -> {
+            JsonObject bundled = new JsonObject();
+            bundled.addProperty("platform", b.platform());
+            bundled.addProperty("version", b.version());
+            server.add("bundled", bundled);
+        });
+        m.embedded().ifPresent(e -> {
+            server.addProperty("running", e.alive());
+            e.pid().ifPresent(pid -> server.addProperty("pid", pid));
+            if (e.lastError() != null) {
+                server.addProperty("processError", e.lastError());
+            }
+        });
+        if (m.modeError() != null) {
+            server.addProperty("error", m.modeError());
+        }
+        if (m.ffmpegAvailable() != null) {
+            server.addProperty("ffmpeg", m.ffmpegAvailable());
+        }
+        if (m.encoderError() != null) {
+            server.addProperty("encoderError", m.encoderError());
+        }
+        out.add("server", server);
         out.addProperty("tokens", services.tokens().size());
         JsonObject tx = new JsonObject();
         tx.addProperty("enabled", m.server().transcodeEnabled());
+        tx.addProperty("live", m.liveTranscodes());
+        tx.addProperty("recordings", m.playbackTranscodes());
         tx.addProperty("active", services.transcoder().active());
         tx.addProperty("max", m.server().maxTranscodes());
         JsonArray running = new JsonArray();
         services.transcoder().activeLive().forEach(running::add);
-        tx.add("live", running);
+        tx.add("running", running);
         out.add("transcodes", tx);
         return out;
     }

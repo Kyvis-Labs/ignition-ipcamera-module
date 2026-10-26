@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Build the module and load it on a dev gateway.
+# PLATFORM=linux-x64 deploys the build with MediaMTX inside.
 #
 # Unsigned modules cannot go through the gateway REST API (it quarantines them
 # with no way out), so this copies into the stack's externalModulesFolder and
@@ -10,11 +11,14 @@ here="$(cd "$(dirname "$0")/.." && pwd)"
 stack="${IGNITION_STACK:?set IGNITION_STACK to the gateway compose directory}"
 
 cd "$here"
-./gradlew build --console=plain -q
+platform="${PLATFORM:-}"
+./gradlew build --console=plain -q ${platform:+-Pplatform=$platform}
 
-modl="$here/build/Camera.unsigned.modl"
+modl="$here/build/Camera${platform:+-$platform}.unsigned.modl"
+# Always under one name: the gateway's data/modules.json registers the module by file path
+# (/modules/Camera.unsigned.modl), and a file it does not know is not loaded.
 rm -f "$stack"/var/modules/Camera*.modl
-cp "$modl" "$stack/var/modules/"
+cp "$modl" "$stack/var/modules/Camera.unsigned.modl"
 
 since="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 docker compose -f "$stack/docker-compose.yml" restart ignition >/dev/null 2>&1 \

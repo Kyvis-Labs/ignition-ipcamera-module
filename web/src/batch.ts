@@ -1,5 +1,5 @@
-import { webrtcCodecs } from "./codecs";
-import { CameraDelegate, lastCodecs, LiveStream } from "./delegate";
+import { mediaCodecs, webrtcCodecs } from "./codecs";
+import { CameraDelegate, LiveStream, stream, TransportPref } from "./delegate";
 
 /** "main", "sub" or a transcode profile name. */
 type Quality = string;
@@ -7,6 +7,7 @@ type Quality = string;
 interface Pending {
     camera: string;
     quality: Quality;
+    transport: TransportPref;
     resolve: (stream: LiveStream) => void;
     reject: (e: Error) => void;
 }
@@ -23,9 +24,9 @@ export class LiveBatcher {
     constructor(private delegate: CameraDelegate, private windowMs = 15) {
     }
 
-    url(camera: string, quality: Quality): Promise<LiveStream> {
+    url(camera: string, quality: Quality, transport: TransportPref = "auto"): Promise<LiveStream> {
         return new Promise((resolve, reject) => {
-            this.queue.push({ camera, quality, resolve, reject });
+            this.queue.push({ camera, quality, transport, resolve, reject });
             if (!this.timer) {
                 this.timer = setTimeout(() => this.flush(), this.windowMs);
             }
@@ -39,13 +40,15 @@ export class LiveBatcher {
         // one entry per camera; a camera asked for twice in one batch shares the answer
         const unique = new Map<string, Pending[]>();
         for (const p of batch) {
-            const key = `${p.camera}|${p.quality}`;
+            const key = `${p.camera}|${p.quality}|${p.transport}`;
             unique.set(key, [...(unique.get(key) ?? []), p]);
         }
-        // the gateway keys its answer by camera, so main and sub of one camera go separately
+        // the gateway keys its answer by camera, so main and sub of one camera go separately, and the
+        // transport is per request, so each transport gets its own
         const groups: Array<Array<[string, Pending[]]>> = [];
         for (const entry of unique) {
-            const g = groups.find(x => !x.some(([k]) => k.split("|")[0] === entry[0].split("|")[0]));
+            const [camera, , transport] = entry[0].split("|");
+            const g = groups.find(x => x[0][1][0].transport === transport && !x.some(([k]) => k.split("|")[0] === camera));
             if (g) {
                 g.push(entry);
             } else {
@@ -56,15 +59,18 @@ export class LiveBatcher {
             try {
                 const res = await this.delegate.request("live", {
                     cameras: group.map(([, ps]) => ({ camera: ps[0].camera, quality: ps[0].quality })),
+                    transport: group[0][1][0].transport,
                     accept: webrtcCodecs(),
+                    acceptMedia: mediaCodecs(),
                 });
                 for (const [, ps] of group) {
-                    const s = res.streams?.[ps[0].camera];
-                    if (s && !s.error) {
-                        lastCodecs.set(ps[0].camera, s.codecs ?? "");
-                    }
-                    ps.forEach(p => (s && !s.error ? p.resolve({ url: s.whep, transcoded: s.transcoded ?? null })
-                        : p.reject(new Error(s?.error ?? "no stream"))));
+                    ps.forEach(p => {
+                        try {
+                            p.resolve(stream(p.camera, res.streams?.[p.camera]));
+                        } catch (e) {
+                            p.reject(e as Error);
+                        }
+                    });
                 }
             } catch (e) {
                 group.forEach(([, ps]) => ps.forEach(p => p.reject(e as Error)));

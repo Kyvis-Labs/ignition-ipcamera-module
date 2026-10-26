@@ -51,6 +51,22 @@ export interface CameraStatus {
     readers: number;
 }
 
+export interface ServerStatus {
+    server: {
+        mode: "embedded" | "external";
+        proxied: boolean;
+        hostPlatform: string;
+        bundled?: { platform: string; version: string };
+        running?: boolean;
+        pid?: number;
+        processError?: string;
+        error?: string;
+        ffmpeg?: boolean;
+        encoderError?: string;
+    };
+    transcodes: { active: number; max: number };
+}
+
 export interface DiscoveredDevice {
     address: string;
     xaddrs: string[];
@@ -73,7 +89,7 @@ export interface ProbeResult {
 
 export const api = {
     status: () => req<{ cameras: Record<string, CameraStatus> }>("GET", "/data/camera/status").then(r => r.cameras),
-    transcodes: () => req<{ transcodes: { active: number; max: number } }>("GET", "/data/camera/status").then(r => r.transcodes),
+    serverStatus: () => req<ServerStatus>("GET", "/data/camera/status"),
     discover: (cidr?: string) => req<DiscoveredDevice[]>("POST", "/data/camera/onvif/discover", cidr ? { cidr } : {}),
     /** With {@code camera} and no password, the gateway uses that camera's stored credentials. */
     probe: (url: string, username: string, password: string, camera?: string) =>

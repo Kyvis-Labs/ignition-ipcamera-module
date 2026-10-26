@@ -32,7 +32,7 @@ mint() {
   exit 1
 }
 {
-  echo '{"base": "https://cams.example.com", "cameras": {'
+  echo "{\"base\": \"${BASE:-}\", \"cameras\": {"
   sep=""
   for c in "${cams[@]}"; do
     main="$(mint "{\"camera\":\"$c\",\"ttlSec\":28800}")"

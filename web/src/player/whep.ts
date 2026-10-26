@@ -25,7 +25,7 @@ export async function whepConnect(url: string, video: HTMLVideoElement, signal: 
             }
             if (session.resource) {
                 // best effort; MediaMTX also reaps the session when ICE drops
-                fetch(session.resource, { method: "DELETE" }).catch(() => undefined);
+                fetch(session.resource, { method: "DELETE", credentials: "omit" }).catch(() => undefined);
             }
         },
     };
@@ -43,8 +43,11 @@ export async function whepConnect(url: string, video: HTMLVideoElement, signal: 
         await pc.setLocalDescription(await pc.createOffer());
         await iceGatheringComplete(pc, 2000);
 
+        // no cookies: the token authorises the request, and through the gateway's proxy a session
+        // cookie would only invite its CSRF checks
         const res = await fetch(url, {
             method: "POST",
+            credentials: "omit",
             headers: { "Content-Type": "application/sdp" },
             body: pc.localDescription!.sdp,
             signal,
@@ -54,8 +57,10 @@ export async function whepConnect(url: string, video: HTMLVideoElement, signal: 
         }
         const location = res.headers.get("Location");
         if (location) {
-            const r = new URL(location, url);
-            const token = new URL(url).searchParams.get("token");
+            // the URL is relative when the gateway proxies MediaMTX
+            const base = new URL(url, window.location.href);
+            const r = new URL(location, base);
+            const token = base.searchParams.get("token");
             if (token) {
                 r.searchParams.set("token", token);
             }

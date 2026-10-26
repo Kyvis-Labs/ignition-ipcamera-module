@@ -1,19 +1,29 @@
 import * as React from "react";
-import { whepConnect, WhepSession } from "./whep";
+import { hlsConnect } from "./hls";
+import { whepConnect } from "./whep";
 
 export type LiveState = "connecting" | "live" | "retrying" | "error" | "idle";
 
+export type Transport = "hls" | "webrtc";
+
+/** A stream to connect to, as the gateway resolved it. */
+export interface LiveSource {
+    url: string;
+    transport: Transport;
+}
+
 export interface LivePlayerProps {
     /**
-     * Fetches a fresh, tokenised WHEP URL. Called on every (re)connect: tokens are short-lived,
-     * so a URL is never reused across attempts.
+     * Fetches a fresh, tokenised stream URL. Called on every (re)connect: tokens are short-lived,
+     * so a URL is never reused across attempts. {@code forceHls} is set after WebRTC has failed to
+     * connect twice running (its media port unreachable), to fall back to HLS through the gateway.
      */
-    resolveUrl: (() => Promise<string>) | null;
+    resolveUrl: ((forceHls: boolean) => Promise<LiveSource>) | null;
     /** Changing this forces a reconnect (e.g. camera or quality changed). */
     streamKey: string;
     muted?: boolean;
     objectFit?: React.CSSProperties["objectFit"];
-    onState?: (state: LiveState, detail?: string) => void;
+    onState?: (state: LiveState, detail?: string, transport?: Transport) => void;
     /** Paused players hold no connection (off-screen wall tiles). */
     paused?: boolean;
 }
@@ -35,11 +45,14 @@ export function LivePlayer(props: LivePlayerProps) {
             return;
         }
         let disposed = false;
-        let session: WhepSession | null = null;
+        let session: { close(): void } | null = null;
         let abort = new AbortController();
         let retryTimer: ReturnType<typeof setTimeout> | undefined;
         let stallTimer: ReturnType<typeof setInterval> | undefined;
         let attempt = 0;
+        let transport: Transport | undefined;
+        // WebRTC attempts that never got media, in a row; two mean its media port is blocked
+        let webrtcFailures = 0;
 
         const teardown = () => {
             abort.abort();
@@ -52,36 +65,56 @@ export function LivePlayer(props: LivePlayerProps) {
             if (disposed) {
                 return;
             }
+            if (transport === "webrtc" && (why.startsWith("connection") || why === "stream stalled")) {
+                webrtcFailures++;
+            }
             teardown();
             const delay = Math.min(MAX_BACKOFF_MS, 1000 * 2 ** Math.min(attempt, 4));
             attempt++;
-            onState.current?.("retrying", why);
+            onState.current?.("retrying", why, transport);
             retryTimer = setTimeout(connect, delay);
         };
 
         const connect = async () => {
             abort = new AbortController();
-            onState.current?.(attempt === 0 ? "connecting" : "retrying");
+            onState.current?.(attempt === 0 ? "connecting" : "retrying", undefined, transport);
             try {
-                const url = await resolveUrl();
+                const src = await resolveUrl(webrtcFailures >= 2);
                 if (disposed) {
                     return;
                 }
-                const s = await whepConnect(url, video, abort.signal);
-                if (disposed) {
-                    s.close();
-                    return;
-                }
-                session = s;
-                s.pc.addEventListener("connectionstatechange", () => {
-                    const st = s.pc.connectionState;
-                    if (st === "connected") {
-                        attempt = 0;
-                        onState.current?.("live");
-                    } else if (st === "failed" || st === "closed") {
-                        scheduleRetry(`connection ${st}`);
+                transport = src.transport;
+                // a WebRTC session that has not started connecting is not stalled yet
+                let connecting = () => false;
+                if (src.transport === "hls") {
+                    const s = await hlsConnect(src.url, video, abort.signal);
+                    if (disposed) {
+                        s.close();
+                        return;
                     }
-                });
+                    session = s;
+                    s.onFatal(why => scheduleRetry(why));
+                    attempt = 0;
+                    onState.current?.("live", undefined, "hls");
+                } else {
+                    const s = await whepConnect(src.url, video, abort.signal);
+                    if (disposed) {
+                        s.close();
+                        return;
+                    }
+                    session = s;
+                    connecting = () => s.pc.connectionState === "new";
+                    s.pc.addEventListener("connectionstatechange", () => {
+                        const st = s.pc.connectionState;
+                        if (st === "connected") {
+                            attempt = 0;
+                            webrtcFailures = 0;
+                            onState.current?.("live", undefined, "webrtc");
+                        } else if (st === "failed" || st === "closed") {
+                            scheduleRetry(`connection ${st}`);
+                        }
+                    });
+                }
                 let lastTime = -1;
                 let lastChange = Date.now();
                 stallTimer = setInterval(() => {
@@ -90,7 +123,7 @@ export function LivePlayer(props: LivePlayerProps) {
                         lastChange = Date.now();
                     } else if (video.paused) {
                         lastChange = Date.now();
-                    } else if (Date.now() - lastChange > STALL_MS && s.pc.connectionState !== "new") {
+                    } else if (Date.now() - lastChange > STALL_MS && !connecting()) {
                         scheduleRetry("stream stalled");
                     }
                 }, 2000);

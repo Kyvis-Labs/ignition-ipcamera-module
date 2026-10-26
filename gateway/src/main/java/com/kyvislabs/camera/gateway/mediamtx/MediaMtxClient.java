@@ -60,20 +60,20 @@ public class MediaMtxClient {
     }
 
     public void addPath(String name, JsonObject conf) throws IOException {
-        send("POST", "/v3/config/paths/add/" + name, conf);
+        send("POST", "/v3/config/paths/add/" + encPath(name), conf);
     }
 
     /** Replaces the whole path config; keys not given revert to defaults. */
     public void replacePath(String name, JsonObject conf) throws IOException {
-        send("POST", "/v3/config/paths/replace/" + name, conf);
+        send("POST", "/v3/config/paths/replace/" + encPath(name), conf);
     }
 
     public void patchPath(String name, JsonObject conf) throws IOException {
-        send("PATCH", "/v3/config/paths/patch/" + name, conf);
+        send("PATCH", "/v3/config/paths/patch/" + encPath(name), conf);
     }
 
     public void deletePath(String name) throws IOException {
-        send("DELETE", "/v3/config/paths/delete/" + name, null);
+        send("DELETE", "/v3/config/paths/delete/" + encPath(name), null);
     }
 
     /** Recorded spans of a path from the playback server. Empty when nothing is recorded. */
@@ -152,6 +152,20 @@ public class MediaMtxClient {
             out.put(o.get("name").getAsString(), o);
         }
         return out;
+    }
+
+    /** A path name in an API URL: slashes kept, pattern characters (~^$\()) percent-encoded. */
+    static String encPath(String name) {
+        StringBuilder sb = new StringBuilder();
+        for (byte b : name.getBytes(java.nio.charset.StandardCharsets.UTF_8)) {
+            char c = (char) (b & 0xff);
+            if (Character.isLetterOrDigit(c) && c < 128 || "/-_.".indexOf(c) >= 0) {
+                sb.append(c);
+            } else {
+                sb.append('%').append(String.format("%02X", b & 0xff));
+            }
+        }
+        return sb.toString();
     }
 
     private void send(String method, String path, JsonObject body) throws IOException {

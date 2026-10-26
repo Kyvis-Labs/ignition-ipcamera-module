@@ -8,7 +8,7 @@ import {
     PropertyTree,
 } from "@inductiveautomation/perspective-client";
 import { LiveBatcher } from "../batch";
-import { CameraDelegate, playbackWindow, toMs } from "../delegate";
+import { CameraDelegate, playbackWindow, toMs, TransportPref } from "../delegate";
 import { LivePlayer, LiveState } from "../player/LivePlayer";
 import { PlaybackPlayer, Spans } from "../player/PlaybackPlayer";
 import { Marker, TimelineBar } from "../player/TimelineBar";
@@ -31,6 +31,7 @@ interface CameraWallProps {
     playbackTime: number | null;
     maxLiveStreams: number;
     tourSeconds: number;
+    transport: TransportPref;
     objectFit: "contain" | "cover" | "fill";
     showStatus: boolean;
     showControls: boolean;
@@ -100,6 +101,7 @@ interface TileProps {
     batcher: LiveBatcher | null;
     delegate: CameraDelegate | undefined;
     objectFit: CameraWallProps["objectFit"];
+    transport: TransportPref;
     showStatus: boolean;
     spans: Spans;
     spansFrom?: number;
@@ -119,13 +121,14 @@ function Tile(props: TileProps) {
     const [state, setState] = React.useState<{ s: LiveState; detail?: string }>({ s: "idle" });
     const quality: "main" | "sub" = maximised ? "main" : "sub";
     const [transcoded, setTranscoded] = React.useState<string | null>(null);
+    const transport = props.transport;
     const resolveUrl = React.useMemo(
-        () => (batcher && tile.camera ? async () => {
-            const s = await batcher.url(tile.camera, quality);
+        () => (batcher && tile.camera ? async (forceHls: boolean) => {
+            const s = await batcher.url(tile.camera, quality, forceHls ? "hls" : transport);
             setTranscoded(s.transcoded);
-            return s.url;
+            return { url: s.url, transport: s.transport };
         } : null),
-        [batcher, tile.camera, quality]
+        [batcher, tile.camera, quality, transport]
     );
     const windowUrl = React.useCallback(async (start: number, dur: number) => {
         const w = await playbackWindow(delegate!, tile.camera, start, dur);
@@ -142,7 +145,7 @@ function Tile(props: TileProps) {
             style={{ position: "relative", background: "#000", overflow: "hidden", minWidth: 0, minHeight: 0, cursor: "zoom-in" }}
         >
             {live ? (
-                <LivePlayer resolveUrl={resolveUrl} streamKey={`${tile.camera}|${quality}`} paused={paused}
+                <LivePlayer resolveUrl={resolveUrl} streamKey={`${tile.camera}|${quality}|${transport}`} paused={paused}
                     objectFit={props.objectFit} onState={(s, d) => setState({ s, detail: d })} />
             ) : (
                 <PlaybackPlayer windowUrl={windowUrl} spans={props.spans} spansFrom={props.spansFrom} spansTo={props.spansTo}
@@ -296,7 +299,7 @@ export function CameraWall(props: ComponentProps<CameraWallProps>) {
                     return (
                         <Tile key={tile.camera} tile={tile} live={live} maximised={maxed === tile.camera}
                             allowedLive={allowed} pageVisible={pageVisible} batcher={batcher} delegate={delegate}
-                            objectFit={p.objectFit} showStatus={p.showStatus}
+                            objectFit={p.objectFit} transport={p.transport} showStatus={p.showStatus}
                             spans={timelines[tile.camera]?.spans ?? []} spansFrom={tl.from} spansTo={tl.to} seek={seek} playing={playing} rate={rate} master={master}
                             onToggleMax={() => setMaxed(m => (m === tile.camera ? null : tile.camera))} />
                     );
@@ -368,6 +371,7 @@ export class CameraWallMeta implements ComponentMeta {
             playbackTime: tree.read("playbackTime", null),
             maxLiveStreams: tree.readNumber("maxLiveStreams", 16),
             tourSeconds: tree.readNumber("tourSeconds", 0),
+            transport: tree.readString("transport", "auto") as TransportPref,
             objectFit: tree.readString("objectFit", "cover") as CameraWallProps["objectFit"],
             showStatus: tree.readBoolean("showStatus", true),
             showControls: tree.readBoolean("showControls", true),

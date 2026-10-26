@@ -1,6 +1,6 @@
 # Camera Module
 
-An Ignition module that adds IP camera live view, recording and playback to Perspective. Cameras are configured on the gateway and shown with the Camera View and Camera Wall components. The module uses [MediaMTX](https://github.com/bluenviron/mediamtx) to pull, record and serve video. MediaMTX runs as a separate service.
+An Ignition module that adds IP camera live view, recording and playback to Perspective. Cameras are configured on the gateway and shown with the Camera View and Camera Wall components. The module uses [MediaMTX](https://github.com/bluenviron/mediamtx) to pull, record and serve video. MediaMTX can run inside the module or as a separate service.
 
 The Camera Module provides support for:
 
@@ -8,7 +8,7 @@ The Camera Module provides support for:
 2. ONVIF discovery, stream URL lookup and events
 3. Off, continuous, camera event and tag driven recording, with pre-roll and post-roll
 4. Timeline playback, bookmarks and event clips
-5. Live video over WebRTC
+5. Low-latency HLS over the gateway's own port, or WebRTC for lower latency
 6. Transcoding to H.264 for browsers that cannot decode a camera's codec, or to save bandwidth
 7. Status tags in a tag provider called `Cameras`
 8. Scripting through `system.camera`
@@ -16,14 +16,21 @@ The Camera Module provides support for:
 Getting Started
 ---------------
 
-1. Run MediaMTX, see [MediaMTX](#mediamtx)
-2. Build the module, see [Building](#building)
-3. Install the module into Ignition 8.3.9+. Start the gateway with `-Dignition.allowunsignedmodules=true`.
-4. Log into the Ignition Gateway
-5. Click on `Connections > Cameras > Settings` and enter the media server settings
-6. Click on `Connections > Cameras > Connections` and click `Create Camera`
-7. Enter the camera manually or click `Discover Cameras` to find ONVIF cameras
-8. Add a Camera View or Camera Wall component to a Perspective view and select your camera
+1. Build the module, see [Building](#building)
+2. Install the module into Ignition 8.3.9+. Start the gateway with `-Dignition.allowunsignedmodules=true`.
+3. Log into the Ignition Gateway
+4. Click on `Connections > Cameras > Settings` and check the media server settings. The platform builds need no changes, but `Media Port` (8189, UDP and TCP) must be open in the host firewall to use WebRTC.
+5. Click on `Connections > Cameras > Connections` and click `Create Camera`
+6. Enter the camera manually or click `Discover Cameras` to find ONVIF cameras
+7. Add a Camera View or Camera Wall component to a Perspective view and select your camera
+
+| Module | MediaMTX |
+|---|---|
+| `Camera-windows-x64.unsigned.modl` | Included, Windows x64 |
+| `Camera-linux-x64.unsigned.modl` | Included, Linux x64 |
+| `Camera-linux-arm64.unsigned.modl` | Included, Linux ARM64 |
+| `Camera-macos-arm64.unsigned.modl` | Included, macOS on Apple silicon |
+| `Camera.unsigned.modl` | Not included, see [External MediaMTX](#external-mediamtx) |
 
 ffmpeg is not included. Install it on the gateway host if you need transcoding.
 
@@ -32,15 +39,16 @@ ffmpeg is not included. Install it on the gateway host if you need transcoding.
 ```
 Browser (Perspective) ── websocket ──▶ Gateway (this module)
   │  asks for a stream                   checks roles, creates a token for one camera
-  ├── WebRTC ─────────────────────────▶ MediaMTX
-  └── recordings ─────────────────────▶ MediaMTX
+  ├── HLS and recordings ─────────────▶ Gateway ──▶ MediaMTX
+  ├── WebRTC signalling ──────────────▶ Gateway ──▶ MediaMTX
+  └── WebRTC media (port 8189) ────────────────────▶ MediaMTX
 
 Gateway ── control API ──▶ MediaMTX: adds a path for each camera and repairs them on a timer
 MediaMTX ── auth callback ──▶ Gateway: checks the token on each request
 MediaMTX ── RTSP/RTSPS ──▶ Cameras
 ```
 
-MediaMTX pulls the camera streams and records them. The gateway owns the configuration and decides who can see what. Browsers connect to MediaMTX directly, so it needs to be reachable over HTTPS, usually through a reverse proxy.
+MediaMTX pulls the camera streams and records them. The gateway owns the configuration and decides who can see what. A reverse proxy is only needed if you want browsers to reach an external MediaMTX directly.
 
 Without a transcode, video is passed through as the camera sends it. A Camera Wall should use camera substreams, otherwise every tile decodes the full resolution stream.
 
@@ -84,7 +92,9 @@ Tag driven bookmarks work in any record mode.
 | `camera` | `""` | Camera name |
 | `mode` | `live` | `live` or `playback` |
 | `playbackTime` | `null` | Time in epoch ms. Updates while playing, and writing it seeks. |
-| `quality` | `auto` | `auto`, `main`, `sub` or a transcode profile such as `720p` |
+| `quality` | `auto` | `auto`, `main`, `sub`, a transcode profile such as `720p`, or `custom` |
+| `customQuality` | `{height: 540, bitrateKbps: 1200}` | Size used by `custom` |
+| `transport` | `auto` | `auto` (gateway default), `hls` or `webrtc` |
 | `muted` | `true` | Mutes the audio |
 | `objectFit` | `contain` | `contain`, `cover` or `fill` |
 | `showStatus` | `true` | Shows the name over the video |
@@ -105,6 +115,7 @@ Events: `onModeChange`, `onBookmark` and `onMarkerClick`.
 | `gap` | `2` | Pixels between tiles |
 | `tourSeconds` | `0` | Seconds between pages, `0` for off |
 | `mode`, `playbackTime` | | Shared by all tiles |
+| `transport` | `auto` | Same as Camera View |
 | `objectFit` | `cover` | Same as Camera View |
 | `maxLiveStreams` | `16` | Maximum tiles playing live at once |
 | `showStatus`, `showControls`, `showTimeline` | `true` | Shows each part |
@@ -146,20 +157,35 @@ system.camera.discoverOnvif("192.0.2.0/24")
 system.camera.getOnvifProfiles("http://192.0.2.20/onvif/device_service", "admin", "password")
 ```
 
+# Live Video
+
+The default is set in `Settings > Live Transport`, and a component can override it.
+
+| | Low-latency HLS (default) | WebRTC |
+|---|---|---|
+| Delay | About 1-2 seconds | Under 1 second |
+| Ports | Gateway port only | Gateway port and media port |
+| Video goes through the gateway | Yes | No |
+| AAC audio | Yes | No |
+
+WebRTC falls back to HLS if it cannot connect. For lower HLS delay, set the camera's keyframe interval to 1-2 seconds.
+
 # Transcoding
 
-The gateway transcodes to H.264 when a browser cannot decode the camera's codec, or when a component asks for a profile. A substream close to the requested size is used instead when there is one.
+The gateway transcodes to H.264 when a browser cannot decode the camera's codec, or when a component asks for a profile or custom size. A substream close to the requested size is used instead when there is one.
 
 Viewers of the same camera and size share a live transcode, and it stops shortly after the last viewer leaves. `Maximum Active Transcodes` limits live and recording transcodes together.
 
-Encoders are CPU, VA-API, Intel Quick Sync and NVIDIA NVENC. A GPU encoder needs the device and its driver wherever ffmpeg runs. In a container, pass in the device, such as `/dev/dri`.
+Encoders are CPU, VA-API, Intel Quick Sync and NVIDIA NVENC. A GPU encoder needs the device and its driver wherever ffmpeg runs. In a container, pass in the device, such as `/dev/dri`. The Settings page shows an error if the selected encoder does not work.
 
-# MediaMTX
+# External MediaMTX
 
-Run MediaMTX yourself, as a container or a service. MediaMTX needs its `-ffmpeg` image for live transcoding. The module was built against MediaMTX 1.21.2.
+Use `Camera.unsigned.modl` or set `Mode` to `External` to run MediaMTX yourself. MediaMTX needs its `-ffmpeg` image for live transcoding. The module was built against MediaMTX 1.21.2.
 
 ```yaml
 api: yes
+hls: yes
+hlsVariant: lowLatency
 webrtcLocalUDPAddress: :8189
 webrtcLocalTCPAddress: :8189
 webrtcAdditionalHosts: [<addresses browsers use>]
@@ -174,16 +200,18 @@ pathDefaults:
 paths: {}
 ```
 
-In `Settings`, enter the URLs the gateway uses to reach MediaMTX, the `Public URL` browsers use, and the same `Auth Callback Key`. Streams are refused until the key is set.
+In `Settings`, enter the URLs the gateway uses to reach MediaMTX and the same `Auth Callback Key`. Leave `Public URL` blank to send browsers through the gateway. Streams are refused until the key is set.
 
 # Building
 
 Requires JDK 17 and Node.js.
 
 ```
-./gradlew build      # Camera.unsigned.modl and unit tests
-scripts/deploy.sh    # build and load on the dev gateway
-scripts/harness.sh   # run the components without Perspective
+./gradlew build                        # Camera.unsigned.modl and unit tests
+./gradlew build -Pplatform=linux-x64   # one platform build
+scripts/build-all.sh                   # all five
+scripts/deploy.sh                      # build and load on the dev gateway
+scripts/harness.sh                     # run the components without Perspective
 ```
 
 Unsigned modules need `-Dignition.allowunsignedmodules=true` on the gateway.

@@ -7,7 +7,7 @@ import {
     PComponent,
     PropertyTree,
 } from "@inductiveautomation/perspective-client";
-import { addBookmark, CameraDelegate, codecProblem, lastCodecs, liveUrl, playbackWindow, toMs } from "../delegate";
+import { addBookmark, CameraDelegate, codecProblem, lastCodecs, liveUrl, playbackWindow, toMs, TransportPref } from "../delegate";
 import { LivePlayer, LiveState } from "../player/LivePlayer";
 import { PlaybackPlayer } from "../player/PlaybackPlayer";
 import { Marker, TimelineBar } from "../player/TimelineBar";
@@ -26,6 +26,8 @@ interface CameraViewProps {
     mode: Mode;
     playbackTime: number | null;
     quality: Quality;
+    customQuality: { height: number; bitrateKbps: number };
+    transport: TransportPref;
     muted: boolean;
     objectFit: "contain" | "cover" | "fill";
     showStatus: boolean;
@@ -122,17 +124,21 @@ export function CameraView(props: ComponentProps<CameraViewProps>) {
         t: m.t, end: m.end, label: m.label || (m.kind === "event" ? "event" : "bookmark"), kind: m.kind,
     })), [timeline, camera]);
 
-    const quality = p.quality || "auto";
+    // custom: the gateway's name for a size it transcodes on demand, c<height>-<kbps>
+    const quality = p.quality === "custom"
+        ? `c${Math.round(p.customQuality.height / 2) * 2}-${Math.round(p.customQuality.bitrateKbps)}`
+        : p.quality || "auto";
     const effective = quality === "auto" ? (width > 0 && width <= SUB_MAX_WIDTH ? "sub" : "main") : quality;
     // the transcode profile of what is showing (live or playback), for the badge
     const [transcoded, setTranscoded] = React.useState<string | null>(null);
+    const transport = p.transport;
     const resolveUrl = React.useMemo(
-        () => (camera && delegate ? async () => {
-            const s = await liveUrl(delegate, camera, effective, heightPx.current);
+        () => (camera && delegate ? async (forceHls: boolean) => {
+            const s = await liveUrl(delegate, camera, effective, heightPx.current, forceHls ? "hls" : transport);
             setTranscoded(s.transcoded);
-            return s.url;
+            return { url: s.url, transport: s.transport };
         } : null),
-        [camera, delegate, effective]
+        [camera, delegate, effective, transport]
     );
     const windowUrl = React.useCallback(async (start: number, dur: number) => {
         const w = await playbackWindow(delegate!, camera, start, dur, quality, heightPx.current);
@@ -176,7 +182,7 @@ export function CameraView(props: ComponentProps<CameraViewProps>) {
         <div {...props.emit({ classes: ["kyvis-camera-view"], style: { display: "flex", flexDirection: "column", background: "#000", overflow: "hidden" } })}>
             <div style={{ position: "relative", flex: "1 1 auto", minHeight: 0 }}>
                 {live ? (
-                    <LivePlayer resolveUrl={resolveUrl} streamKey={`${camera}|${effective}`} muted={p.muted} objectFit={p.objectFit}
+                    <LivePlayer resolveUrl={resolveUrl} streamKey={`${camera}|${effective}|${transport}`} muted={p.muted} objectFit={p.objectFit}
                         onState={(s, detail) => setLiveState({ s, detail })} />
                 ) : (
                     <PlaybackPlayer windowUrl={windowUrl} spans={spans} spansFrom={tl.from} spansTo={tl.to}
@@ -254,6 +260,11 @@ export class CameraViewMeta implements ComponentMeta {
             mode: (tree.readString("mode", "live") === "playback" ? "playback" : "live"),
             playbackTime: tree.read("playbackTime", null),
             quality: tree.readString("quality", "auto") as Quality,
+            transport: tree.readString("transport", "auto") as TransportPref,
+            customQuality: {
+                height: tree.readNumber("customQuality.height", 540),
+                bitrateKbps: tree.readNumber("customQuality.bitrateKbps", 1200),
+            },
             muted: tree.readBoolean("muted", true),
             objectFit: tree.readString("objectFit", "contain") as CameraViewProps["objectFit"],
             showStatus: tree.readBoolean("showStatus", true),

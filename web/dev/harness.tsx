@@ -22,13 +22,23 @@ class HarnessDelegate extends CameraDelegate {
     async request(op: string, payload: any): Promise<any> {
         this.calls[op] = (this.calls[op] ?? 0) + 1;
         const { base, cameras } = this.tokens;
+        // no base: MediaMTX is reached through the gateway's proxy, as with the embedded server
+        const whep = (path: string, token: string) => base ? `${base}/${path}/whep?token=${token}`
+            : `/data/camera/whep?path=${encodeURIComponent(path)}&token=${token}`;
+        const pb = (endpoint: string, q: URLSearchParams) => base ? `${base}/${endpoint}?${q}` : `/data/camera/playback/${endpoint}?${q}`;
         switch (op) {
             case "live": {
                 const streams: any = {};
+                // like the gateway: HLS unless WebRTC is asked for (the harness cannot see the setting)
+                const hls = payload.transport !== "webrtc" && !base;
                 for (const { camera, quality } of payload.cameras) {
                     const t = cameras[camera];
                     const sub = quality === "sub" && t.sub;
-                    streams[camera] = { whep: `${base}/cam/${camera}${sub ? "/sub" : ""}/whep?token=${sub ? t.sub : t.main}`, quality: sub ? "sub" : "main" };
+                    const path = `cam/${camera}${sub ? "/sub" : ""}`;
+                    const token = sub ? t.sub : t.main;
+                    streams[camera] = hls
+                        ? { transport: "hls", url: `/data/camera/hls?path=${encodeURIComponent(path)}&file=index.m3u8&token=${token}`, quality: sub ? "sub" : "main" }
+                        : { transport: "webrtc", url: whep(path, token), quality: sub ? "sub" : "main" };
                 }
                 return { ok: true, streams };
             }
@@ -36,7 +46,7 @@ class HarnessDelegate extends CameraDelegate {
                 const timelines: any = {};
                 for (const camera of payload.cameras) {
                     const q = new URLSearchParams({ path: `cam/${camera}`, start: new Date(payload.start).toISOString(), end: new Date(payload.end).toISOString(), token: cameras[camera].playback });
-                    const r = await fetch(`${base}/list?${q}`);
+                    const r = await fetch(pb("list", q));
                     const list = r.ok ? await r.json() : [];
                     const runs: Array<[number, number]> = [];
                     for (const s of list) {
@@ -52,7 +62,7 @@ class HarnessDelegate extends CameraDelegate {
                 const streams: any = {};
                 for (const camera of payload.cameras) {
                     const q = new URLSearchParams({ path: `cam/${camera}`, start: new Date(payload.start).toISOString(), duration: String(payload.duration), format: "mp4", token: cameras[camera].playback });
-                    streams[camera] = { url: `${base}/get?${q}`, start: payload.start, duration: payload.duration };
+                    streams[camera] = { url: pb("get", q), start: payload.start, duration: payload.duration };
                 }
                 return { ok: true, streams };
             }

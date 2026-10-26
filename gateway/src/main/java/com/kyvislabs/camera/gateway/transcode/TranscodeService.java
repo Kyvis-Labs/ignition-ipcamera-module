@@ -87,7 +87,7 @@ public class TranscodeService {
             }
             // the browser cannot decode it: transcode, sized to the viewer (or the stream asked for)
             wanted = pick(s.transcodeProfiles(), target(maxHeight, direct.height));
-            if (wanted == null || !s.transcodeEnabled()) {
+            if (wanted == null || !manager.liveTranscodes()) {
                 return new Choice(direct.path, null, direct.codec, null);
             }
         } else {
@@ -97,8 +97,10 @@ public class TranscodeService {
                 && sub.height * 4 >= wanted.height() * 3 && (main.height == 0 || sub.height < main.height)) {
                 return new Choice(sub.path, null, sub.codec, null);
             }
-            if (!s.transcodeEnabled()) {
-                return new Choice(null, null, null, "transcoding is turned off on the gateway");
+            if (!manager.liveTranscodes()) {
+                return new Choice(null, null, null, !s.transcodeEnabled() ? "transcoding is turned off on the gateway"
+                    : manager.encoderError() != null ? "transcoding unavailable: " + manager.encoderError()
+                    : "transcoding needs ffmpeg on the gateway");
             }
         }
         // transcode from the smallest source that still covers the profile's height
@@ -210,7 +212,7 @@ public class TranscodeService {
      */
     public TranscodeProfile forPlayback(String camera, String requested, Set<String> accept, int maxHeight) {
         MediaServerConfig s = manager.server();
-        if (!s.transcodeEnabled()) {
+        if (!manager.playbackTranscodes()) {
             return null;
         }
         TranscodeProfile wanted = s.profile(requested).orElse(null);
@@ -279,7 +281,9 @@ public class TranscodeService {
             + "&duration=" + durationSec + "&format=mp4&token=" + serviceToken.get();
         List<String> cmd = Ffmpeg.playback(s, p, input, tmp.toString());
         long t0 = System.nanoTime();
-        Process proc = new ProcessBuilder(cmd).redirectErrorStream(true).start();
+        ProcessBuilder pb = new ProcessBuilder(cmd).redirectErrorStream(true);
+        Ffmpeg.quietGpuDrivers(pb.environment());
+        Process proc = pb.start();
         CompletableFuture<String> output = CompletableFuture.supplyAsync(() -> {
             try {
                 return new String(proc.getInputStream().readAllBytes(), StandardCharsets.UTF_8);

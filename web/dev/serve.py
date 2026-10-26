@@ -28,7 +28,7 @@ class Handler(SimpleHTTPRequestHandler):
         except urllib.error.HTTPError as e:
             status, headers, data = e.code, e.headers, e.read()
         self.send_response(status)
-        for h in ("Content-Type", "Content-Range", "Accept-Ranges"):
+        for h in ("Content-Type", "Content-Range", "Accept-Ranges", "Location", "ETag", "Link", "Accept-Patch"):
             if headers.get(h):
                 self.send_header(h, headers[h])
         self.send_header("Content-Length", str(len(data)))
@@ -42,6 +42,7 @@ class Handler(SimpleHTTPRequestHandler):
         return self._proxy()
 
     do_PUT = do_POST
+    do_PATCH = do_POST
     do_DELETE = do_POST
 
 

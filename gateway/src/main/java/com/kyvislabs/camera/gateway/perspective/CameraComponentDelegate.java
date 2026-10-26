@@ -26,6 +26,7 @@ import com.kyvislabs.camera.gateway.events.CameraEvent;
 import com.kyvislabs.camera.gateway.mediamtx.MediaMtxClient;
 import com.kyvislabs.camera.gateway.mediamtx.Timeline;
 import com.kyvislabs.camera.gateway.mediamtx.PathConfigs;
+import com.kyvislabs.camera.gateway.config.LiveTransport;
 import com.kyvislabs.camera.gateway.config.TranscodeProfile;
 import com.kyvislabs.camera.gateway.transcode.TranscodeRoute;
 import com.kyvislabs.camera.gateway.transcode.TranscodeService;
@@ -88,18 +89,22 @@ public class CameraComponentDelegate extends ComponentModelDelegate {
     }
 
     /**
-     * {@code {cameras: [{camera, quality, maxHeight?}], accept?: [codec...]}} -> {@code {streams:
-     * {camera: {whep, quality, codecs, transcoded?, error?}}}}. One round trip for a whole wall.
+     * {@code {cameras: [{camera, quality, maxHeight?}], transport?, accept?: [codec...],
+     * acceptMedia?: [codec...]}} -> {@code {streams: {camera: {transport, url, quality, codecs,
+     * transcoded?, error?}}}}. One round trip for a whole wall.
      *
-     * <p>{@code quality} is {@code main}, {@code sub} or a transcode profile name. {@code accept}
-     * lists the video codecs the browser decodes over WebRTC; a stream in any other codec is
-     * transcoded to a profile sized to {@code maxHeight} (the viewer's height in device pixels).
+     * <p>{@code quality} is {@code main}, {@code sub} or a transcode profile name. {@code transport}
+     * is {@code hls}, {@code webrtc} or {@code auto} (the gateway's default). {@code accept} lists
+     * the video codecs the browser decodes over WebRTC, {@code acceptMedia} those it plays from
+     * HLS; a stream in any other codec than the chosen transport's list is transcoded to a profile
+     * sized to {@code maxHeight} (the viewer's height in device pixels).
      */
     private void live(JsonObject req, JsonObject res) {
         JsonObject streams = new JsonObject();
         Collection<String> roles = roles();
         String user = user().map(WebAuthUser::getUserName).orElse("");
-        Set<String> accept = accept(req);
+        boolean hls = hls(req);
+        Set<String> accept = hls ? codecs(req, "acceptMedia") : codecs(req, "accept");
         for (JsonElement el : requested(req)) {
             JsonObject item = el.getAsJsonObject();
             String camera = item.get("camera").getAsString();
@@ -117,9 +122,13 @@ public class CameraComponentDelegate extends ComponentModelDelegate {
                     out.addProperty("error", c.error());
                 } else {
                     String token = services.tokens().mint(Set.of(c.path()), Set.of(TokenService.Action.READ), LIVE_TTL, user);
-                    out.addProperty("whep", services.manager().server().publicUrl() + "/" + c.path() + "/whep?token=" + token);
+                    out.addProperty("transport", hls ? "hls" : "webrtc");
+                    out.addProperty("url", hls ? services.manager().hlsUrl(c.path(), token) : services.manager().whepUrl(c.path(), token));
+                    if (!hls) {
+                        out.addProperty("whep", services.manager().whepUrl(c.path(), token));
+                    }
                     out.addProperty("quality", c.path().endsWith("/sub") ? "sub" : c.profile() != null ? c.profile() : "main");
-                    out.addProperty("codecs", c.profile() != null ? "H264, Opus" : CameraManager.codecs(services.manager().runtime(c.path())));
+                    out.addProperty("codecs", c.profile() != null ? "H264" : CameraManager.codecs(services.manager().runtime(c.path())));
                     if (c.profile() != null) {
                         out.addProperty("transcoded", c.profile());
                     }
@@ -130,11 +139,25 @@ public class CameraComponentDelegate extends ComponentModelDelegate {
         res.add("streams", streams);
     }
 
+    /** Whether this viewer gets low-latency HLS: asked for, or the gateway's default. */
+    private boolean hls(JsonObject req) {
+        String t = req.has("transport") ? req.get("transport").getAsString() : "auto";
+        return switch (t) {
+            case "hls" -> true;
+            case "webrtc" -> false;
+            default -> services.manager().server().liveTransport() == LiveTransport.HLS;
+        };
+    }
+
     /** The video codecs the client says it decodes; empty when it did not say. */
     private static Set<String> accept(JsonObject req) {
+        return codecs(req, "accept");
+    }
+
+    private static Set<String> codecs(JsonObject req, String key) {
         Set<String> out = new java.util.HashSet<>();
-        if (req.has("accept") && req.get("accept").isJsonArray()) {
-            req.getAsJsonArray("accept").forEach(e -> out.add(e.getAsString()));
+        if (req.has(key) && req.get(key).isJsonArray()) {
+            req.getAsJsonArray(key).forEach(e -> out.add(e.getAsString()));
         }
         return out;
     }
@@ -235,9 +258,9 @@ public class CameraComponentDelegate extends ComponentModelDelegate {
                     s.addProperty("transcoded", tx.name());
                     s.addProperty("codecs", "H264, MPEG-4 Audio");
                 } else {
-                    s.addProperty("url", services.manager().server().publicUrl() + "/get?path=" + path
+                    s.addProperty("url", services.manager().playbackUrl("get", "path=" + path
                         + "&start=" + URLEncoder.encode(Instant.ofEpochMilli(startMs).toString(), StandardCharsets.UTF_8)
-                        + "&duration=" + duration + "&format=mp4&token=" + token);
+                        + "&duration=" + duration + "&format=mp4&token=" + token));
                     s.addProperty("start", startMs);
                     s.addProperty("duration", duration);
                 }

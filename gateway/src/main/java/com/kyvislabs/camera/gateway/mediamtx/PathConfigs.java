@@ -51,22 +51,38 @@ public final class PathConfigs {
     }
 
     private static final Pattern OURS = Pattern.compile("cam/([^/]+)(/sub)?(/tx/[^/]+)?");
+    /** The pattern path for custom sizes, as {@link #customTxPattern} writes it. */
+    private static final Pattern OURS_PATTERN = Pattern.compile("~\\^cam/((?:[^/\\\\]|\\\\.)+)(/sub)?/tx/c.*");
 
-    /** The camera name for a module-managed path, or null if the path is not ours. */
+    /** The camera name for a module-managed path (or pattern path), or null if it is not ours. */
     public static String cameraOf(String path) {
-        Matcher m = path == null ? null : OURS.matcher(path);
-        return m != null && m.matches() ? m.group(1) : null;
+        if (path == null) {
+            return null;
+        }
+        Matcher p = OURS_PATTERN.matcher(path);
+        if (p.matches()) {
+            return p.group(1).replace("\\.", ".");
+        }
+        Matcher m = OURS.matcher(path);
+        return m.matches() ? m.group(1) : null;
+    }
+
+    /**
+     * The MediaMTX pattern path that serves every custom size of a camera's main stream (or
+     * substream): requested paths look like {@code cam/<name>/tx/c540-1200}.
+     */
+    public static String customTxPattern(String camera, boolean fromSub) {
+        return "~^cam/" + camera.replace(".", "\\.") + (fromSub ? "/sub" : "") + "/tx/c(\\d+)-(\\d+)$";
     }
 
     /**
      * @param password     plaintext camera password, or null
      * @param recordingNow EVENT/TAG with no pre-roll only: whether an event is currently open,
      *                     since recording is then switched on and off directly
-     * @param transcoderAuth {@code user:token} the transcoder's ffmpeg authenticates with, or
-     *                       null for no transcode paths
+     * @param transcoder how MediaMTX runs transcodes, or null for no transcode paths
      */
     public static Map<String, JsonObject> desired(String camera, CameraConfig c, String password,
-                                                  MediaServerConfig server, boolean recordingNow, String transcoderAuth) {
+                                                  MediaServerConfig server, boolean recordingNow, Transcoder transcoder) {
 
         Map<String, JsonObject> out = new LinkedHashMap<>();
 
@@ -111,22 +127,36 @@ public final class PathConfigs {
             sub.addProperty("record", false);
             out.put(subPath(camera), sub);
         }
-        if (server.transcodeEnabled() && transcoderAuth != null) {
+        if (server.transcodeEnabled() && transcoder != null) {
             for (TranscodeProfile p : server.transcodeProfiles()) {
-                out.put(txPath(camera, p.name(), false), transcode(server, p, mainPath(camera), transcoderAuth));
+                out.put(txPath(camera, p.name(), false), transcode(server, p, mainPath(camera), transcoder));
                 if (c.hasSubstream()) {
-                    out.put(txPath(camera, p.name(), true), transcode(server, p, subPath(camera), transcoderAuth));
+                    out.put(txPath(camera, p.name(), true), transcode(server, p, subPath(camera), transcoder));
                 }
+            }
+            out.put(customTxPattern(camera, false), transcode(server, null, mainPath(camera), transcoder));
+            if (c.hasSubstream()) {
+                out.put(customTxPattern(camera, true), transcode(server, null, subPath(camera), transcoder));
             }
         }
         return out;
     }
 
-    private static JsonObject transcode(MediaServerConfig server, TranscodeProfile p, String input, String auth) {
+    /**
+     * @param ffmpeg the executable MediaMTX runs
+     * @param auth   {@code user:token} its ffmpeg authenticates with
+     */
+    public record Transcoder(String ffmpeg, String auth) {
+    }
+
+    /** @param p the profile, or null for the custom-size pattern path */
+    private static JsonObject transcode(MediaServerConfig server, TranscodeProfile p, String input, Transcoder t) {
         JsonObject o = new JsonObject();
         o.addProperty("source", "publisher");
         o.addProperty("record", false);
-        o.addProperty("runOnDemand", Ffmpeg.join(Ffmpeg.live(server, p, input, auth)));
+        o.addProperty("runOnDemand", Ffmpeg.join(p == null
+            ? Ffmpeg.liveCustom(server, input, t.ffmpeg(), t.auth())
+            : Ffmpeg.live(server, p, input, t.ffmpeg(), t.auth())));
         o.addProperty("runOnDemandRestart", true);
         o.addProperty("runOnDemandStartTimeout", "20s");
         o.addProperty("runOnDemandCloseAfter", server.transcodeIdleSec() + "s");

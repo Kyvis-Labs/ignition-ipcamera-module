@@ -19,6 +19,12 @@
     "playbackTime": {"type": ["number", "null"], "format": "date", "description": "Shared playback position (epoch ms). Written back about once a second; writing it seeks every tile.", "default": null},
     "maxLiveStreams": {"type": "integer", "description": "Most live tiles connected at once (decoder/bandwidth budget). Further tiles show a paused placeholder.", "default": 16},
     "tourSeconds": {"type": "integer", "description": "Advance to the next page every N seconds; 0 = off.", "default": 0},
+    "transport": {
+      "type": "string",
+      "enum": ["auto", "hls", "webrtc"],
+      "description": "Live video transport. auto uses the gateway's default; hls is low-latency HLS through the gateway's own port (about 1-2 s behind); webrtc is about 0.2-0.5 s behind but needs the media port reachable, and falls back to HLS when it is not.",
+      "default": "auto"
+    },
     "objectFit": {"type": "string", "enum": ["contain", "cover", "fill"], "default": "cover"},
     "gap": {"type": "integer", "description": "Pixels between tiles.", "default": 2},
     "showStatus": {"type": "boolean", "default": true},
