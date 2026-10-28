@@ -78,8 +78,8 @@ public class CameraGatewayHook extends AbstractGatewayModuleHook {
             .addPage("Connections", p -> p
                 .title("Camera Connections")
                 .position(1)
-                // a splat: the page also serves /manage/<camera> underneath it (8.3 has no hidden pages)
-                .mount("/connections/cameras/connections/*", "CamerasPage", pages)
+                // the Manage and Wall pages are this page with ?manage=<camera> / ?wall (8.3 has no hidden pages)
+                .mount("/connections/cameras/connections", "CamerasPage", pages)
                 .addAssociatedResourceType(CameraConfig.TYPE)));
 
         statusTags = new StatusTags(context);

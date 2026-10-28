@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useFormContext } from "react-hook-form";
-import { useMatches, useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
     Alert, AlertStates, Button, ButtonColorClasses, CircularProgress, ColumnDef, FormLabel, InfoTooltipCell, PageHeader, RadioCard,
     TextInput, TooltipSize,
@@ -121,16 +121,15 @@ interface Discovery {
 const NO_DISCOVERY: Discovery = { busy: false, cidr: "", found: null, error: null, choice: "manual" };
 
 /**
- * Connections → Cameras → Connections: the gateway's resource grid, plus ONVIF discovery. The
- * page is mounted at a splat, so {@code manage/<camera>} under it opens that camera's Manage
- * page (8.3 has no way to mount a page without a nav entry).
+ * Connections → Cameras → Connections: the gateway's resource grid, plus ONVIF discovery.
+ * With {@code ?manage=<camera>} it is that camera's Manage page, with {@code ?wall} the camera
+ * wall (8.3 has no way to mount a page without a nav entry, so they share this one).
  */
 export function CamerasPage() {
     const navigate = useNavigate();
-    const matches = useMatches();
-    const splat = String((matches[matches.length - 1]?.params as Record<string, string | undefined> | undefined)?.["*"] ?? "");
-    const manage = /^manage\/([^/]+)\/?$/.exec(splat);
-    const wall = /^wall\/?$/.test(splat);
+    const [params] = useSearchParams();
+    const manage = params.get("manage");
+    const wall = params.has("wall");
     const [discovery, setDiscovery] = React.useState<Discovery>(NO_DISCOVERY);
     const cameras = React.useRef<Row[]>([]);
     const showMore = React.useCallback((row: Row) => [{
@@ -159,7 +158,7 @@ export function CamerasPage() {
     ], [discovery]);
 
     if (manage) {
-        return <ManagePage name={decodeURIComponent(manage[1])} />;
+        return <ManagePage name={manage} />;
     }
     if (wall) {
         return <WallPage />;

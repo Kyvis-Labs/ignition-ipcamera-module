@@ -130,6 +130,11 @@ public record CameraConfig(
         return type == CameraType.ONVIF && (recordMode == RecordMode.EVENT || onvifTags);
     }
 
+    /** Whether a secret is set at all: "None" in the form arrives here as no SecretConfig. */
+    public static boolean hasSecret(SecretConfig s) {
+        return s != null;
+    }
+
     /** The configured ONVIF URL, or http://<main stream host>/onvif/device_service. */
     public String onvifDeviceUrl() {
         if (onvifUrl != null && !onvifUrl.isBlank()) {
@@ -163,6 +168,9 @@ public record CameraConfig(
                 "onvifUrl", "onvifUrl must be an http:// or https:// URL");
             v.checkField(c.mainUrl() == null || c.mainUrl().matches("(?i)rtsps?://.+"),
                 "mainUrl", "mainUrl must be an rtsp:// or rtsps:// URL");
+            // MediaMTX refuses a source URL with a user and no password; catch it here, not in the log
+            v.checkField(c.username() == null || c.username().isBlank() || hasSecret(c.password()),
+                "password", "a username needs a password; leave both blank for a camera without authentication");
             v.checkField(!c.hasSubstream() || c.subUrl().matches("(?i)rtsps?://.+"),
                 "subUrl", "subUrl must be an rtsp:// or rtsps:// URL");
             v.checkField(c.retentionDays() >= 1, "retentionDays", "retentionDays must be at least 1");

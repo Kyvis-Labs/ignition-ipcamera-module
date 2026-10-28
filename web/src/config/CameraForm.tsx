@@ -35,7 +35,11 @@ const SCHEMA = SchemaUtils.createBackupConfigSchema(yup.object({
         mainUrl: yup.string().trim().required("Main stream URL is required").matches(RTSP, "Must be an rtsp:// or rtsps:// URL"),
         subUrl: yup.string().trim().default("").test("rtsp", "Must be an rtsp:// or rtsps:// URL", v => !v || RTSP.test(v)),
         username: yup.string().default(""),
-        password: OptionalPasswordFieldSchema.clone().default(null),
+        password: OptionalPasswordFieldSchema.clone().default(null)
+            .when("username", ([username], s) => (username && String(username).trim()
+                ? s.test("needs-password", "A username needs a password; leave both blank for a camera without authentication",
+                    (v: any) => !!v && typeof v === "object" && !!v.type && v.type !== "None")
+                : s)),
         onvifUrl: yup.string().trim().default("").test("http", "Must be an http:// or https:// URL", v => !v || HTTP.test(v)),
         rtspTransport: yup.string().oneOf(["tcp", "udp", "automatic"]).default("tcp"),
         tlsFingerprint: yup.string().default(""),
