@@ -53,7 +53,10 @@ await esbuild.build({
     outdir,
     sourcemap: "linked",
     minify: process.env.NODE_ENV === "production",
-    external: gatewayLibs,
+    // perspective-client is not in the gateway import map either: listing it here turns an
+    // accidental import of the Perspective-coupled code into a load error (the require shim
+    // below throws) instead of silently bundling the whole Perspective client
+    external: [...gatewayLibs, "@inductiveautomation/perspective-client"],
     banner: {
         js: `define(${JSON.stringify(gatewayLibs)}, function () {\n`
             + "var __libs = {}, __args = arguments;\n"

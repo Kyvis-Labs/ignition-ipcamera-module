@@ -40,6 +40,10 @@ public record CameraEvent(
         return new CameraEvent(id, camera, kind, startMs, endMs, label, source, user, protect, parts);
     }
 
+    public CameraEvent withProtect(boolean p) {
+        return new CameraEvent(id, camera, kind, startMs, endMs, label, source, user, p, clips);
+    }
+
     /** The clip part containing t, if any. */
     public ClipPart clipAt(long t) {
         for (ClipPart c : clips) {

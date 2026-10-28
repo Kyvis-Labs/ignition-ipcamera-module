@@ -109,6 +109,178 @@ public class CameraScriptModule {
         return svc().events().exportClip(camera, ms(start), ms(end)).toString();
     }
 
+    /**
+     * Copies [start, end] out of the recordings, one MP4 per recorded run (so a gap gives two
+     * files); returns the paths. The files are listed by {@link #getExports}.
+     */
+    public List<String> exportRange(String camera, Object start, Object end) throws Exception {
+        List<String> out = new ArrayList<>();
+        svc().events().exportRange(camera, ms(start), ms(end)).forEach(p -> out.add(p.toString()));
+        return out;
+    }
+
+    /** The camera's exported files: list of {file, path, bytes, modified}. */
+    public List<Map<String, Object>> getExports(String camera) throws Exception {
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (var e : svc().events().listExports(camera)) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("file", e.file());
+            m.put("path", svc().events().exportFile(camera, e.file()).toString());
+            m.put("bytes", e.bytes());
+            m.put("modified", new Date(e.modifiedMs()));
+            out.add(m);
+        }
+        return out;
+    }
+
+    public boolean deleteExport(String camera, String file) throws Exception {
+        return svc().events().deleteExport(camera, file);
+    }
+
+    // ---- events ----
+
+    public Map<String, Object> getEvent(String camera, String id) throws Exception {
+        return svc().events().get(camera, id).map(this::describe).orElse(null);
+    }
+
+    /** Removes a closed event or bookmark and its clips. */
+    public void deleteEvent(String camera, String id) throws Exception {
+        svc().events().delete(camera, id);
+    }
+
+    /** Keeps (or releases) an event or bookmark from retention; protecting exports its clip if it has none. */
+    public Map<String, Object> protectEvent(String camera, String id, boolean protect) throws Exception {
+        return describe(svc().events().setProtect(camera, id, protect));
+    }
+
+    /** Exports the event's clip now; fails if the recording no longer holds it. */
+    public Map<String, Object> exportEvent(String camera, String id) throws Exception {
+        return describe(svc().events().exportNow(camera, id));
+    }
+
+    // ---- storage ----
+
+    /**
+     * What the camera's recordings take up: {mode, canDelete, bytes, segments, oldest, newest,
+     * days: [{day, bytes, segments, durationSec}], eventCount, clipCount, eventBytes, exportFiles,
+     * exportBytes}. Sizes are null with an external MediaMTX. Days are in the gateway's zone.
+     */
+    public Map<String, Object> getStorage(String camera) throws Exception {
+        StorageService.Summary s = svc().storage().summary(camera, java.time.ZoneId.systemDefault());
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("mode", s.mode());
+        m.put("canDelete", s.canDelete());
+        m.put("recordingsPath", s.recordingsPath());
+        m.put("bytes", s.bytes());
+        m.put("segments", s.segments());
+        m.put("oldest", s.oldestMs() == null ? null : new Date(s.oldestMs()));
+        m.put("newest", s.newestMs() == null ? null : new Date(s.newestMs()));
+        List<Map<String, Object>> days = new ArrayList<>();
+        for (StorageService.Day d : s.days()) {
+            Map<String, Object> dm = new LinkedHashMap<>();
+            dm.put("day", d.day().toString());
+            dm.put("bytes", d.bytes());
+            dm.put("segments", d.segments());
+            dm.put("durationSec", d.durationSec());
+            days.add(dm);
+        }
+        m.put("days", days);
+        m.put("eventCount", s.eventCount());
+        m.put("clipCount", s.clipCount());
+        m.put("eventBytes", s.eventBytes());
+        m.put("exportFiles", s.exportFiles());
+        m.put("exportBytes", s.exportBytes());
+        return m;
+    }
+
+    /**
+     * Deletes the recording segments starting in [start, end). Refuses when events in the range
+     * still wait for their clip, unless {@code force}. Returns {deleted, bytes, skipped}.
+     */
+    public Map<String, Object> deleteRecordings(String camera, Object start, Object end, boolean force) throws Exception {
+        return deleted(svc().storage().deleteRange(camera, ms(start), ms(end), force));
+    }
+
+    public Map<String, Object> deleteRecordings(String camera, Object start, Object end) throws Exception {
+        return deleteRecordings(camera, start, end, false);
+    }
+
+    /** Every segment but the one being written, every closed event and bookmark, and the exports. */
+    public Map<String, Object> deleteAllRecordings(String camera) throws Exception {
+        return deleted(svc().storage().deleteAll(camera));
+    }
+
+    private static Map<String, Object> deleted(com.kyvislabs.camera.gateway.mediamtx.RecordingStore.Deleted d) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("deleted", d.files());
+        m.put("bytes", d.bytes());
+        m.put("skipped", d.skipped());
+        return m;
+    }
+
+    // ---- stills ----
+
+    /** A JPEG of the camera now, as bytes (e.g. for system.net.sendEmail attachments). */
+    public byte[] snapshot(String camera) throws Exception {
+        return snapshot(camera, null, 720);
+    }
+
+    /** A JPEG of the camera at {@code time} (null = now), {@code height} rows tall. */
+    public byte[] snapshot(String camera, Object time, int height) throws Exception {
+        Long t = time == null ? null : ms(time);
+        return java.nio.file.Files.readAllBytes(svc().snapshots().snapshot(camera, t, height));
+    }
+
+    /** The event's thumbnail JPEG as bytes. */
+    public byte[] thumbnail(String camera, String id) throws Exception {
+        CameraEvent e = svc().events().get(camera, id).orElseThrow(() -> new IllegalArgumentException("no event " + id));
+        return java.nio.file.Files.readAllBytes(svc().snapshots().thumbnail(camera, e));
+    }
+
+    // ---- PTZ (ONVIF cameras with a PTZ service) ----
+
+    public boolean ptzSupported(String camera) {
+        return svc().ptz().supported(camera);
+    }
+
+    /** Starts moving at the given speeds, each -1..1, until {@link #ptzStop}. */
+    public void ptzMove(String camera, double pan, double tilt, double zoom) throws Exception {
+        svc().ptz().move(camera, pan, tilt, zoom);
+    }
+
+    public void ptzStop(String camera) throws Exception {
+        svc().ptz().stop(camera);
+    }
+
+    public void ptzHome(String camera) throws Exception {
+        svc().ptz().home(camera);
+    }
+
+    /** The camera's presets: list of {token, name}. */
+    public List<Map<String, Object>> ptzPresets(String camera) throws Exception {
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (var p : svc().ptz().info(camera).presets()) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("token", p.token());
+            m.put("name", p.name());
+            out.add(m);
+        }
+        return out;
+    }
+
+    public void ptzGotoPreset(String camera, String token) throws Exception {
+        svc().ptz().gotoPreset(camera, token);
+    }
+
+    /** Saves the current position as a preset; returns its token. */
+    public String ptzSetPreset(String camera, String name) throws Exception {
+        return svc().ptz().setPreset(camera, name);
+    }
+
+    public void ptzRemovePreset(String camera, String token) throws Exception {
+        svc().ptz().removePreset(camera, token);
+    }
+
     /** WS-Discovery; with a CIDR (e.g. "192.0.2.0/24") also probes each address directly. */
     public List<Map<String, Object>> discoverOnvif(String cidr) throws Exception {
         List<Map<String, Object>> out = new ArrayList<>();

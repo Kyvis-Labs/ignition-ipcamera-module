@@ -13,22 +13,66 @@
       },
       "default": []
     },
-    "columns": {"type": "integer", "description": "Grid columns; 0 = square-ish automatic layout.", "default": 0},
-    "rows": {"type": "integer", "description": "Grid rows; 0 = automatic. More cameras than columns x rows are paged.", "default": 0},
-    "mode": {"type": "string", "enum": ["live", "playback"], "description": "live, or synchronised playback of every tile at playbackTime.", "default": "live"},
-    "playbackTime": {"type": ["number", "null"], "format": "date", "description": "Shared playback position (epoch ms). Written back about once a second; writing it seeks every tile.", "default": null},
-    "maxLiveStreams": {"type": "integer", "description": "Most live tiles connected at once (decoder/bandwidth budget). Further tiles show a paused placeholder.", "default": 16},
-    "tourSeconds": {"type": "integer", "description": "Advance to the next page every N seconds; 0 = off.", "default": 0},
-    "transport": {
-      "type": "string",
-      "enum": ["auto", "hls", "webrtc"],
-      "description": "Live video transport. auto uses the gateway's default; hls is low-latency HLS through the gateway's own port (about 1-2 s behind); webrtc is about 0.2-0.5 s behind but needs the media port reachable, and falls back to HLS when it is not.",
-      "default": "auto"
+    "layout": {
+      "type": "object",
+      "description": "The grid.",
+      "properties": {
+        "columns": {"type": "integer", "description": "Grid columns; 0 = square-ish automatic layout.", "default": 0},
+        "rows": {"type": "integer", "description": "Grid rows; 0 = automatic. More cameras than columns x rows are paged.", "default": 0},
+        "gap": {"type": "integer", "description": "Pixels between tiles.", "default": 2},
+        "tourSeconds": {"type": "integer", "description": "Advance to the next page every N seconds; 0 = off.", "default": 0}
+      },
+      "default": {"columns": 0, "rows": 0, "gap": 2, "tourSeconds": 0}
     },
-    "objectFit": {"type": "string", "enum": ["contain", "cover", "fill"], "default": "cover"},
-    "gap": {"type": "integer", "description": "Pixels between tiles.", "default": 2},
-    "showStatus": {"type": "boolean", "default": true},
-    "showControls": {"type": "boolean", "default": true},
-    "showTimeline": {"type": "boolean", "description": "Timeline of the union of the shown cameras' recordings.", "default": true}
+    "playback": {
+      "type": "object",
+      "description": "What is playing, shared by every tile. Both values are written back as the controls and the player move them.",
+      "properties": {
+        "mode": {"type": "string", "enum": ["live", "playback"], "description": "live, or synchronised playback of every tile at time.", "default": "live"},
+        "time": {"type": ["number", "null"], "format": "date", "description": "Shared playback position (epoch ms). Written back about once a second; writing it seeks every tile.", "default": null}
+      },
+      "default": {"mode": "live", "time": null}
+    },
+    "stream": {
+      "type": "object",
+      "description": "How the pictures arrive.",
+      "properties": {
+        "transport": {
+          "type": "string",
+          "enum": ["auto", "hls", "webrtc"],
+          "description": "Live video transport. auto uses the gateway's default; hls is low-latency HLS through the gateway's own port (about 1-2 s behind); webrtc is about 0.2-0.5 s behind but needs the media port reachable, and falls back to HLS when it is not.",
+          "default": "auto"
+        },
+        "fit": {"type": "string", "enum": ["contain", "cover", "fill"], "description": "How each picture fills its tile.", "default": "cover"},
+        "maxLiveStreams": {"type": "integer", "description": "Most live tiles connected at once (decoder/bandwidth budget). Further tiles show a paused placeholder.", "default": 16}
+      },
+      "default": {"transport": "auto", "fit": "cover", "maxLiveStreams": 16}
+    },
+    "status": {
+      "type": "object",
+      "description": "The nameplate on each tile.",
+      "properties": {
+        "show": {"type": "boolean", "default": true}
+      },
+      "default": {"show": true}
+    },
+    "controls": {
+      "type": "object",
+      "description": "The control bar under the grid.",
+      "properties": {
+        "show": {"type": "boolean", "default": true},
+        "collapsed": {"type": "boolean", "description": "Control bar and timeline hidden behind a small tab in the bottom-right corner. Written back when the user collapses or restores them.", "default": false}
+      },
+      "default": {"show": true, "collapsed": false}
+    },
+    "timeline": {
+      "type": "object",
+      "description": "Timeline of the union of the shown cameras' recordings.",
+      "properties": {
+        "show": {"type": "boolean", "default": true},
+        "range": {"type": "string", "enum": ["1h", "6h", "24h", "7d"], "description": "How much time the timeline spans. Written back when the user changes it.", "default": "1h"}
+      },
+      "default": {"show": true, "range": "1h"}
+    }
   }
 }

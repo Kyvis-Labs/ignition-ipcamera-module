@@ -1,15 +1,19 @@
 import * as React from "react";
 import { useFormContext } from "react-hook-form";
+import { useMatches, useNavigate } from "react-router-dom";
 import {
     Alert, AlertStates, Button, ButtonColorClasses, CircularProgress, ColumnDef, FormLabel, InfoTooltipCell, PageHeader, RadioCard,
     TextInput, TooltipSize,
 } from "@inductiveautomation/ignition-web-ui";
 import {
-    ConfigResponseItem, Content, EnhancedStatusBadgeCell, ResourceModeDataGrid, apiErrorNotification,
+    ConfigResponseItem, Content, EnhancedStatusBadgeCell, ResourceModeDataGrid, ShowMoreOrder, apiErrorNotification,
 } from "@inductiveautomation/ignition-gateway-lib";
 import { Camera } from "@inductiveautomation/ignition-icons";
 import { CAMERA_TYPE, CameraConfig, DiscoveredDevice, useDiscoverCamerasMutation } from "./camera.service";
 import { CameraForm, CAMERA_DEFAULTS } from "./CameraForm";
+import { ManagePage } from "./manage/ManagePage";
+import { WallPage } from "./manage/WallPage";
+import { managePath, wallPath } from "./manage/paths";
 
 const TYPE_LABELS: Record<string, string> = { RTSP: "RTSP", ONVIF: "ONVIF", UNIFI_PROTECT: "UniFi Protect" };
 const MODE_LABELS: Record<string, string> = { OFF: "Off", CONTINUOUS: "Continuous", EVENT: "Camera events", TAG: "Tag conditions" };
@@ -116,10 +120,25 @@ interface Discovery {
 
 const NO_DISCOVERY: Discovery = { busy: false, cidr: "", found: null, error: null, choice: "manual" };
 
-/** Connections → Cameras → Connections: the gateway's resource grid, plus ONVIF discovery. */
+/**
+ * Connections → Cameras → Connections: the gateway's resource grid, plus ONVIF discovery. The
+ * page is mounted at a splat, so {@code manage/<camera>} under it opens that camera's Manage
+ * page (8.3 has no way to mount a page without a nav entry).
+ */
 export function CamerasPage() {
+    const navigate = useNavigate();
+    const matches = useMatches();
+    const splat = String((matches[matches.length - 1]?.params as Record<string, string | undefined> | undefined)?.["*"] ?? "");
+    const manage = /^manage\/([^/]+)\/?$/.exec(splat);
+    const wall = /^wall\/?$/.test(splat);
     const [discovery, setDiscovery] = React.useState<Discovery>(NO_DISCOVERY);
     const cameras = React.useRef<Row[]>([]);
+    const showMore = React.useCallback((row: Row) => [{
+        text: "Manage",
+        icon: Camera,
+        order: ShowMoreOrder.EDIT + 1,
+        onClick: () => navigate(managePath(row.name)),
+    }], [navigate]);
 
     // The grid owns the data; this only remembers it for the discovery step's "already added".
     const transformData = React.useCallback((items: Row[]) => {
@@ -139,6 +158,12 @@ export function CamerasPage() {
         { id: "camera-settings", title: "Camera Settings", validationRequired: true, content: <CameraForm type="create" /> },
     ], [discovery]);
 
+    if (manage) {
+        return <ManagePage name={decodeURIComponent(manage[1])} />;
+    }
+    if (wall) {
+        return <WallPage />;
+    }
     return (
         <>
             <PageHeader pageTitle="Camera Connections" />
@@ -152,6 +177,11 @@ export function CamerasPage() {
                     onClose={kind => kind === "create" && setDiscovery(NO_DISCOVERY)}
                     formDefaults={CAMERA_DEFAULTS}
                     transformData={transformData}
+                    showMore={showMore}
+                    actionButtons={createButton => [
+                        { inputType: "button", children: "Camera Wall", colorClass: ButtonColorClasses.SECONDARY, onClick: () => navigate(wallPath()) },
+                        createButton,
+                    ]}
                     rename={false}
                     blankStateConfig={BLANK_STATE}
                 />

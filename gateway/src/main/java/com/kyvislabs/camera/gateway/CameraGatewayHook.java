@@ -29,6 +29,8 @@ import com.kyvislabs.camera.gateway.events.EventService;
 import com.kyvislabs.camera.gateway.onvif.OnvifClient;
 import com.kyvislabs.camera.gateway.onvif.OnvifEvent;
 import com.kyvislabs.camera.gateway.onvif.OnvifEventSubscriber;
+import com.kyvislabs.camera.gateway.onvif.PtzService;
+import com.kyvislabs.camera.gateway.transcode.SnapshotService;
 import com.kyvislabs.camera.gateway.mediamtx.MediaMtxClient;
 import com.kyvislabs.camera.gateway.mediamtx.ProxyRoutes;
 import com.kyvislabs.camera.gateway.perspective.CameraComponentDelegate;
@@ -43,6 +45,7 @@ public class CameraGatewayHook extends AbstractGatewayModuleHook {
     private ComponentModelDelegateRegistry delegateRegistry;
 
     private StatusTags statusTags;
+    private CameraOps ops;
     private CameraHealth health;
     private TokenService tokens;
     private CameraManager manager;
@@ -75,7 +78,8 @@ public class CameraGatewayHook extends AbstractGatewayModuleHook {
             .addPage("Connections", p -> p
                 .title("Camera Connections")
                 .position(1)
-                .mount("/connections/cameras/connections", "CamerasPage", pages)
+                // a splat: the page also serves /manage/<camera> underneath it (8.3 has no hidden pages)
+                .mount("/connections/cameras/connections/*", "CamerasPage", pages)
                 .addAssociatedResourceType(CameraConfig.TYPE)));
 
         statusTags = new StatusTags(context);
@@ -154,7 +158,11 @@ public class CameraGatewayHook extends AbstractGatewayModuleHook {
         manager.setEvents(events);
         transcoder = new TranscodeService(manager, tokens::serviceToken, events.store().root());
         manager.setTranscoder(transcoder);
-        services = new CameraServices(manager, tokens, events, transcoder);
+        services = new CameraServices(manager, tokens, events, transcoder)
+            .withStorage(new StorageService(manager, events, transcoder))
+            .withSnapshots(new SnapshotService(manager, tokens, tokens::serviceToken, events.store(), transcoder.cacheDir()))
+            .withPtz(new PtzService(manager));
+        ops = new CameraOps(services);
 
         cameraHandler.startup();
         manager.startup();
@@ -164,8 +172,8 @@ public class CameraGatewayHook extends AbstractGatewayModuleHook {
         componentRegistry.registerComponent(CameraViewComponent.DESCRIPTOR);
         componentRegistry.registerComponent(CameraWallComponent.DESCRIPTOR);
         delegateRegistry = perspective.getComponentModelDelegateRegistry();
-        delegateRegistry.register(CameraViewComponent.COMPONENT_ID, c -> new CameraComponentDelegate(c, services));
-        delegateRegistry.register(CameraWallComponent.COMPONENT_ID, c -> new CameraComponentDelegate(c, services));
+        delegateRegistry.register(CameraViewComponent.COMPONENT_ID, c -> new CameraComponentDelegate(c, ops));
+        delegateRegistry.register(CameraWallComponent.COMPONENT_ID, c -> new CameraComponentDelegate(c, ops));
         log.infof("Camera module started (event storage %s)", events.store().root());
     }
 
@@ -213,6 +221,8 @@ public class CameraGatewayHook extends AbstractGatewayModuleHook {
     public void mountRouteHandlers(RouteGroup routes) {
         AuthRoute.mount(routes, tokens, manager::callbackKey, path -> transcoder == null || transcoder.admit(path));
         AdminRoutes.mount(routes, () -> services);
+        ManageRoutes.mount(routes, () -> services, () -> ops);
+        MediaRoutes.mount(routes, () -> services, tokens);
         ClipRoute.mount(routes, () -> events.store(), tokens);
         TranscodeRoute.mount(routes, () -> transcoder, manager::server, tokens);
         ProxyRoutes.mount(routes, manager::server, tokens);

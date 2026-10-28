@@ -9,95 +9,108 @@
         "suggestion-source": "camera.cameras"
       }
     },
-    "mode": {
-      "type": "string",
-      "enum": [
-        "live",
-        "playback"
-      ],
-      "description": "live, or playback of recordings at playbackTime. The component's own Live / back-30s / timeline controls write this.",
-      "default": "live"
-    },
-    "playbackTime": {
-      "type": [
-        "number",
-        "null"
-      ],
-      "format": "date",
-      "description": "Playback position (epoch ms). Written back about once a second while playing; writing it seeks.",
-      "default": null
-    },
-    "quality": {
-      "type": "string",
-      "description": "The size to show: auto (the camera's own stream, transcoded only when this browser cannot decode it), or a transcode profile from Camera Settings (e.g. 720p). The dropdown lists the profiles. Applies to live video and playback. Also accepted: main, sub, or custom (the size and bitrate in customQuality).",
-      "default": "auto",
-      "extension": {
-        "suggestion-source": "camera.profiles"
-      }
-    },
-    "customQuality": {
+    "playback": {
       "type": "object",
-      "description": "Used when quality is custom: the video is transcoded to this height and bitrate.",
+      "description": "What is playing. Both values are written back as the component's controls and the player move them.",
       "properties": {
-        "height": {
-          "type": "number",
-          "description": "Height in pixels, 120-2160; never above the camera's own.",
-          "default": 540
+        "mode": {
+          "type": "string",
+          "enum": ["live", "playback"],
+          "description": "live, or playback of recordings at time. Live / back-30s / the timeline write this.",
+          "default": "live"
         },
-        "bitrateKbps": {
-          "type": "number",
-          "description": "Video bitrate in kbit/s, 100-20000.",
-          "default": 1200
+        "time": {
+          "type": ["number", "null"],
+          "format": "date",
+          "description": "Playback position (epoch ms). Written back about once a second while playing; writing it seeks.",
+          "default": null
         }
       },
-      "default": {
-        "height": 540,
-        "bitrateKbps": 1200
-      }
+      "default": { "mode": "live", "time": null }
     },
-    "transport": {
-      "type": "string",
-      "enum": [
-        "auto",
-        "hls",
-        "webrtc"
-      ],
-      "description": "Live video transport. auto uses the gateway's default; hls is low-latency HLS through the gateway's own port (about 1-2 s behind); webrtc is about 0.2-0.5 s behind but needs the media port reachable, and falls back to HLS when it is not.",
-      "default": "auto"
+    "stream": {
+      "type": "object",
+      "description": "How the picture arrives.",
+      "properties": {
+        "quality": {
+          "type": "string",
+          "description": "auto (the camera's own stream, transcoded only when this browser cannot decode it), or a transcode profile from Camera Settings (e.g. 720p); the dropdown lists the profiles. Applies to live video and playback. Also accepted: main, sub, or custom (the size and bitrate in customQuality).",
+          "default": "auto",
+          "extension": {
+            "suggestion-source": "camera.profiles"
+          }
+        },
+        "customQuality": {
+          "type": "object",
+          "description": "Used when quality is custom: the video is transcoded to this height and bitrate.",
+          "properties": {
+            "height": { "type": "number", "description": "Height in pixels, 120-2160; never above the camera's own.", "default": 540 },
+            "bitrateKbps": { "type": "number", "description": "Video bitrate in kbit/s, 100-20000.", "default": 1200 }
+          },
+          "default": { "height": 540, "bitrateKbps": 1200 }
+        },
+        "transport": {
+          "type": "string",
+          "enum": ["auto", "hls", "webrtc"],
+          "description": "Live video transport. auto uses the gateway's default; hls is low-latency HLS through the gateway's own port (about 1-2 s behind); webrtc is about 0.2-0.5 s behind but needs the media port reachable, and falls back to HLS when it is not.",
+          "default": "auto"
+        },
+        "muted": {
+          "type": "boolean",
+          "description": "Mute audio. Browsers block autoplay with sound, so unmuting needs a user gesture.",
+          "default": true
+        },
+        "fit": {
+          "type": "string",
+          "enum": ["contain", "cover", "fill"],
+          "description": "How the picture fills the component.",
+          "default": "contain"
+        }
+      },
+      "default": { "quality": "auto", "customQuality": { "height": 540, "bitrateKbps": 1200 }, "transport": "auto", "muted": true, "fit": "contain" }
     },
-    "muted": {
-      "type": "boolean",
-      "description": "Mute audio. Browsers block autoplay with sound, so unmuting needs a user gesture.",
-      "default": true
+    "status": {
+      "type": "object",
+      "description": "The nameplate over the picture: state dot, camera name, LIVE or the playback time.",
+      "properties": {
+        "show": { "type": "boolean", "default": true }
+      },
+      "default": { "show": true }
     },
-    "objectFit": {
-      "type": "string",
-      "enum": [
-        "contain",
-        "cover",
-        "fill"
-      ],
-      "default": "contain"
+    "controls": {
+      "type": "object",
+      "description": "The control bar under the picture.",
+      "properties": {
+        "show": { "type": "boolean", "description": "Show the control bar (Live, back 30 s, play, speed, range).", "default": true },
+        "collapsed": { "type": "boolean", "description": "Control bar and timeline hidden behind a small tab in the picture's bottom-right corner. Written back when the user collapses or restores them.", "default": false },
+        "bookmarks": { "type": "boolean", "description": "Show the bookmark button. Bookmarks are attributed to the session user.", "default": true },
+        "snapshots": { "type": "boolean", "description": "Show the snapshot button: a JPEG of the shown moment opens in a new tab.", "default": true }
+      },
+      "default": { "show": true, "collapsed": false, "bookmarks": true, "snapshots": true }
     },
-    "showStatus": {
-      "type": "boolean",
-      "description": "Show the camera name and connection state overlay.",
-      "default": true
+    "timeline": {
+      "type": "object",
+      "description": "The recording timeline under the control bar.",
+      "properties": {
+        "show": { "type": "boolean", "default": true },
+        "range": {
+          "type": "string",
+          "enum": ["1h", "6h", "24h", "7d"],
+          "description": "How much time the timeline spans. Written back when the user changes it from the control bar.",
+          "default": "1h"
+        }
+      },
+      "default": { "show": true, "range": "1h" }
     },
-    "showControls": {
-      "type": "boolean",
-      "description": "Show Live / back-30s / play / speed / range controls.",
-      "default": true
-    },
-    "showTimeline": {
-      "type": "boolean",
-      "description": "Show the recording timeline under the video.",
-      "default": true
-    },
-    "allowBookmarks": {
-      "type": "boolean",
-      "description": "Show the bookmark (\u2605) button. Bookmarks are attributed to the session user.",
-      "default": true
+    "ptz": {
+      "type": "object",
+      "description": "Pan, tilt and zoom, for an ONVIF camera with a PTZ service.",
+      "properties": {
+        "show": { "type": "boolean", "description": "Allow the PTZ pad and its toggle on the control bar, when the camera has PTZ.", "default": true },
+        "visible": { "type": "boolean", "description": "The pad is showing over the live picture. Written back when the user toggles it.", "default": true },
+        "speed": { "type": "number", "description": "Speed of a held arrow or zoom button, 0.1-1.", "default": 0.5 }
+      },
+      "default": { "show": true, "visible": true, "speed": 0.5 }
     }
   }
 }

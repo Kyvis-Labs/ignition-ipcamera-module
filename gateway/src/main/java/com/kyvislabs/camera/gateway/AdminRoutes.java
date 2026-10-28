@@ -14,7 +14,6 @@ import com.inductiveautomation.ignition.gateway.dataroutes.RouteGroup;
 import com.inductiveautomation.ignition.gateway.dataroutes.RouteHandler;
 import com.kyvislabs.camera.gateway.auth.TokenService;
 import com.kyvislabs.camera.gateway.config.CameraConfig;
-import com.kyvislabs.camera.gateway.events.CameraEvent;
 import com.kyvislabs.camera.gateway.mediamtx.EmbeddedMediaServer;
 import com.kyvislabs.camera.gateway.mediamtx.PathConfigs;
 import com.kyvislabs.camera.gateway.onvif.OnvifDiscovery;
@@ -32,8 +31,8 @@ import jakarta.servlet.http.HttpServletResponse;
  *   ttlSec?}} -- stream URLs plus a scoped token, for clients outside Perspective.</li>
  *   <li>{@code POST /data/camera/event} {@code {camera, on, label?}} -- holds an EVENT/TAG
  *   camera's event open while {@code on}; the post-roll starts when released.</li>
- *   <li>{@code POST /data/camera/bookmark} {@code {camera, label?, start?, end?, protect?}}
- *   (epoch ms; default now-10 s .. now+10 s).</li>
+ *   <li>{@code POST /data/camera/bookmark} {@code {camera, label?, time? | start?, end?, protect?}}
+ *   (epoch ms; default 10 s either side of {@code time}, or of now).</li>
  *   <li>{@code POST /data/camera/onvif/discover} {@code {cidr?, waitMs?}} -- WS-Discovery; with
  *   {@code cidr} also probes each address directly (needed from a bridged container).</li>
  *   <li>{@code POST /data/camera/onvif/probe} {@code {url, username, password, camera?}} -- device info
@@ -136,18 +135,11 @@ public final class AdminRoutes {
             .requirePermission(PermissionType.WRITE)
             .type(RouteGroup.TYPE_JSON)
             .nocache()
-            .handler((req, res) -> {
+            .handler(jsonErrors((req, res) -> {
                 JsonObject body = JsonParser.parseString(req.readBody()).getAsJsonObject();
-                long now = System.currentTimeMillis();
-                long start = body.has("start") ? body.get("start").getAsLong() : now - 10_000;
-                long end = body.has("end") ? body.get("end").getAsLong() : now + 10_000;
-                CameraEvent b = ref.get().events().addBookmark(body.get("camera").getAsString(),
-                    body.has("label") ? body.get("label").getAsString() : "", start, end,
-                    body.has("protect") && body.get("protect").getAsBoolean(), req.getActor(), "api");
-                JsonObject out = new JsonObject();
-                out.addProperty("id", b.id());
-                return out;
-            })
+                // {camera, label?, time? | start?, end?, protect?} -> {id, bookmark}
+                return new CameraOps(ref.get()).bookmark(body, req.getActor(), "api", cfg -> true);
+            }))
             .mount();
     }
 

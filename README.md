@@ -5,9 +5,9 @@ An Ignition module that adds IP camera live view, recording and playback to Pers
 The Camera Module provides support for:
 
 1. Generic RTSP cameras, ONVIF cameras and UniFi Protect RTSPS streams
-2. ONVIF discovery, stream URL lookup and events
+2. ONVIF discovery, stream URL lookup, events and PTZ
 3. Off, continuous, camera event and tag driven recording, with pre-roll and post-roll
-4. Timeline playback, bookmarks and event clips
+4. Timeline playback, bookmarks, event clips, snapshots and MP4 export
 5. Low-latency HLS over the gateway's own port, or WebRTC for lower latency
 6. Transcoding to H.264 for browsers that cannot decode a camera's codec, or to save bandwidth
 7. Status and ONVIF event tags in a tag provider called `Cameras`
@@ -81,6 +81,18 @@ An event starts `preRollSec` before the first trigger and ends `postRollSec` aft
 
 Tag driven bookmarks work in any record mode.
 
+# Manage Page
+
+Click `... > Manage` on a camera to open its page in the gateway:
+
+- Live video, recordings, snapshots, bookmarks and PTZ
+- Export a time range as MP4
+- Storage used per day, and delete recordings
+- Search, play, protect, export and delete events
+- View all cameras together, live or at a point in time
+
+Sizes and deletes need access to the files, so they only work with the included MediaMTX.
+
 # Components
 
 ## Camera View
@@ -90,17 +102,23 @@ Tag driven bookmarks work in any record mode.
 | Prop | Default | Description |
 |---|---|---|
 | `camera` | `""` | Camera name |
-| `mode` | `live` | `live` or `playback` |
-| `playbackTime` | `null` | Time in epoch ms. Updates while playing, and writing it seeks. |
-| `quality` | `auto` | `auto`, `main`, `sub`, a transcode profile such as `720p`, or `custom` |
-| `customQuality` | `{height: 540, bitrateKbps: 1200}` | Size used by `custom` |
-| `transport` | `auto` | `auto` (gateway default), `hls` or `webrtc` |
-| `muted` | `true` | Mutes the audio |
-| `objectFit` | `contain` | `contain`, `cover` or `fill` |
-| `showStatus` | `true` | Shows the name over the video |
-| `showControls` | `true` | Shows the control bar |
-| `showTimeline` | `true` | Shows the timeline |
-| `allowBookmarks` | `true` | Shows the bookmark button |
+| `playback.mode` | `live` | `live` or `playback` |
+| `playback.time` | `null` | Time in epoch ms. Updates while playing, and writing it seeks. |
+| `stream.quality` | `auto` | `auto`, `main`, `sub`, a transcode profile such as `720p`, or `custom` |
+| `stream.customQuality` | `{height: 540, bitrateKbps: 1200}` | Size used by `custom` |
+| `stream.transport` | `auto` | `auto` (gateway default), `hls` or `webrtc` |
+| `stream.muted` | `true` | Mutes the audio |
+| `stream.fit` | `contain` | `contain`, `cover` or `fill` |
+| `status.show` | `true` | Shows the name over the video |
+| `controls.show` | `true` | Shows the control bar |
+| `controls.collapsed` | `false` | Hides the controls and timeline behind a tab |
+| `controls.bookmarks` | `true` | Shows the bookmark button |
+| `controls.snapshots` | `true` | Shows the snapshot button |
+| `timeline.show` | `true` | Shows the timeline |
+| `timeline.range` | `1h` | `1h`, `6h`, `24h` or `7d` |
+| `ptz.show` | `true` | Allows PTZ controls on a camera that supports them |
+| `ptz.visible` | `true` | Shows the PTZ pad |
+| `ptz.speed` | `0.5` | PTZ speed, 0.1 to 1 |
 
 Events: `onModeChange`, `onBookmark` and `onMarkerClick`.
 
@@ -111,14 +129,16 @@ Events: `onModeChange`, `onBookmark` and `onMarkerClick`.
 | Prop | Default | Description |
 |---|---|---|
 | `cameras` | `[]` | Camera names, or `{camera, label}` |
-| `columns`, `rows` | `0` | Grid size, `0` for automatic. Extra cameras go on more pages. |
-| `gap` | `2` | Pixels between tiles |
-| `tourSeconds` | `0` | Seconds between pages, `0` for off |
-| `mode`, `playbackTime` | | Shared by all tiles |
-| `transport` | `auto` | Same as Camera View |
-| `objectFit` | `cover` | Same as Camera View |
-| `maxLiveStreams` | `16` | Maximum tiles playing live at once |
-| `showStatus`, `showControls`, `showTimeline` | `true` | Shows each part |
+| `layout.columns`, `layout.rows` | `0` | Grid size, `0` for automatic. Extra cameras go on more pages. |
+| `layout.gap` | `2` | Pixels between tiles |
+| `layout.tourSeconds` | `0` | Seconds between pages, `0` for off |
+| `playback.mode`, `playback.time` | | Shared by all tiles |
+| `stream.transport` | `auto` | Same as Camera View |
+| `stream.fit` | `cover` | Same as Camera View |
+| `stream.maxLiveStreams` | `16` | Maximum tiles playing live at once |
+| `status.show`, `controls.show`, `timeline.show` | `true` | Shows each part |
+| `controls.collapsed` | `false` | Same as Camera View |
+| `timeline.range` | `1h` | Same as Camera View |
 
 Double click a tile to maximize it and switch to the main stream. Double click again to return.
 
@@ -147,13 +167,35 @@ Functions are in gateway scope. Times are Dates or epoch ms.
 system.camera.getCameras()
 system.camera.getStatus("front")
 system.camera.getRecordings("front", start, end)
+system.camera.getStorage("front")
+system.camera.deleteRecordings("front", start, end)
+system.camera.deleteAllRecordings("front")
+system.camera.exportRange("front", start, end)
 system.camera.exportClip("front", start, end)
+system.camera.getExports("front")
+system.camera.deleteExport("front", file)
 
 system.camera.getEvents("front", start, end)
+system.camera.getEvent("front", id)
+system.camera.deleteEvent("front", id)
+system.camera.protectEvent("front", id, True)
+system.camera.exportEvent("front", id)
 system.camera.startRecording("front", "Line stopped")
 system.camera.stopRecording("front")
 system.camera.addBookmark("front", "Operator note")
 system.camera.addBookmark("front", "Batch 42", start, end, True)
+
+system.camera.snapshot("front")
+system.camera.thumbnail("front", eventId)
+
+system.camera.ptzSupported("front")
+system.camera.ptzMove("front", pan, tilt, zoom)
+system.camera.ptzStop("front")
+system.camera.ptzHome("front")
+system.camera.ptzPresets("front")
+system.camera.ptzGotoPreset("front", token)
+system.camera.ptzSetPreset("front", "Door")
+system.camera.ptzRemovePreset("front", token)
 
 system.camera.discoverOnvif("192.0.2.0/24")
 system.camera.getOnvifProfiles("http://192.0.2.20/onvif/device_service", "admin", "password")

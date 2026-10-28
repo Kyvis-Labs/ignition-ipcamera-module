@@ -114,6 +114,20 @@ class OnvifParsingTest {
     }
 
     @Test
+    void ptzPresetsAreParsed() throws Exception {
+        String xml = """
+            <s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" xmlns:tptz="http://www.onvif.org/ver20/ptz/wsdl" xmlns:tt="http://www.onvif.org/ver10/schema">
+            <s:Body><tptz:GetPresetsResponse>
+              <tptz:Preset token="1"><tt:Name>Door</tt:Name></tptz:Preset>
+              <tptz:Preset token="2"><tt:Name>Desk</tt:Name></tptz:Preset>
+            </tptz:GetPresetsResponse></s:Body></s:Envelope>""";
+        List<OnvifClient.Preset> presets = OnvifClient.parsePresets(Soap.parse(xml));
+        assertEquals(2, presets.size());
+        assertEquals("1", presets.get(0).token());
+        assertEquals("Desk", presets.get(1).name());
+    }
+
+    @Test
     void faultsAreReported() throws Exception {
         String fault = """
             <s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Body><s:Fault>

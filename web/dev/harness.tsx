@@ -74,6 +74,12 @@ class HarnessDelegate extends CameraDelegate {
     }
 }
 
+/** Sets a dotted path ("playback.mode") on a copy of the props, the way a property-tree write lands. */
+function setPath(obj: any, path: string, value: unknown): any {
+    const [head, ...rest] = path.split(".");
+    return { ...obj, [head]: rest.length ? setPath(obj?.[head] ?? {}, rest.join("."), value) : value };
+}
+
 function fakeComponentProps(props: any, delegate: CameraDelegate, el: HTMLElement | null, onWrite: (k: string, v: unknown) => void) {
     return {
         props,
@@ -86,14 +92,16 @@ function fakeComponentProps(props: any, delegate: CameraDelegate, el: HTMLElemen
 function WallApp({ tokens }: { tokens: Tokens }) {
     const delegate = React.useMemo(() => new HarnessDelegate(tokens), [tokens]);
     const [wprops, setWprops] = React.useState<any>({
-        cameras: Object.keys(tokens.cameras).map(c => ({ camera: c })), columns: 0, rows: 0, mode: "live",
-        playbackTime: null, maxLiveStreams: 16, tourSeconds: 0, objectFit: "cover", showStatus: true,
-        showControls: true, showTimeline: true, gap: 2,
+        cameras: Object.keys(tokens.cameras).map(c => ({ camera: c })),
+        layout: { columns: 0, rows: 0, gap: 2, tourSeconds: 0 },
+        playback: { mode: "live", time: null },
+        stream: { transport: "auto", fit: "cover", maxLiveStreams: 16 },
+        status: { show: true }, controls: { show: true, collapsed: false }, timeline: { show: true, range: "1h" },
     });
-    (window as any).__harness = { set: (k: string, v: unknown) => setWprops((p: any) => ({ ...p, [k]: v })), get: () => wprops, delegate };
+    (window as any).__harness = { set: (k: string, v: unknown) => setWprops((p: any) => setPath(p, k, v)), get: () => wprops, delegate };
     return (
         <div style={{ width: 1100, height: 700 }}>
-            <CameraWall {...fakeComponentProps(wprops, delegate, null, (k, v) => setWprops((p: any) => ({ ...p, [k]: v })))} />
+            <CameraWall {...fakeComponentProps(wprops, delegate, null, (k, v) => setWprops((p: any) => setPath(p, k, v)))} />
         </div>
     );
 }
@@ -103,14 +111,19 @@ function App({ tokens }: { tokens: Tokens }) {
     const host = React.useRef<HTMLDivElement>(null);
     const [el, setEl] = React.useState<HTMLElement | null>(null);
     const [vprops, setVprops] = React.useState<any>({
-        camera: Object.keys(tokens.cameras)[0], mode: "live", playbackTime: null, quality: "auto",
-        muted: true, objectFit: "contain", showStatus: true, showControls: true, showTimeline: true, allowBookmarks: true,
+        camera: Object.keys(tokens.cameras)[0],
+        playback: { mode: "live", time: null },
+        stream: { quality: "auto", customQuality: { height: 540, bitrateKbps: 1200 }, transport: "auto", muted: true, fit: "contain" },
+        status: { show: true },
+        controls: { show: true, collapsed: false, bookmarks: true, snapshots: true },
+        timeline: { show: true, range: "1h" },
+        ptz: { show: true, visible: true, speed: 0.5 },
     });
     React.useEffect(() => setEl(host.current), []);
-    (window as any).__harness = { set: (k: string, v: unknown) => setVprops((p: any) => ({ ...p, [k]: v })), get: () => vprops };
+    (window as any).__harness = { set: (k: string, v: unknown) => setVprops((p: any) => setPath(p, k, v)), get: () => vprops };
     return (
         <div ref={host} style={{ width: 960, height: 620 }}>
-            <CameraView {...fakeComponentProps(vprops, delegate, el, (k, v) => setVprops((p: any) => ({ ...p, [k]: v })))} />
+            <CameraView {...fakeComponentProps(vprops, delegate, el, (k, v) => setVprops((p: any) => setPath(p, k, v)))} />
         </div>
     );
 }

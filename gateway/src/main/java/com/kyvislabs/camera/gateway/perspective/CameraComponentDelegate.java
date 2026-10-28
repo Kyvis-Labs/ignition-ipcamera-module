@@ -1,58 +1,38 @@
 package com.kyvislabs.camera.gateway.perspective;
 
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
-import java.time.Duration;
-import java.time.Instant;
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 
 import com.inductiveautomation.ignition.common.auth.web.WebAuthUser;
-import com.inductiveautomation.ignition.common.gson.JsonArray;
 import com.inductiveautomation.ignition.common.gson.JsonElement;
 import com.inductiveautomation.ignition.common.gson.JsonObject;
 import com.inductiveautomation.perspective.gateway.api.Component;
 import com.inductiveautomation.perspective.gateway.api.ComponentModelDelegate;
 import com.inductiveautomation.perspective.gateway.messages.EventFiredMsg;
 import com.kyvislabs.camera.gateway.CameraAccess;
-import com.kyvislabs.camera.gateway.CameraManager;
-import com.kyvislabs.camera.gateway.CameraServices;
-import com.kyvislabs.camera.gateway.auth.TokenService;
-import com.kyvislabs.camera.gateway.config.CameraConfig;
-import com.kyvislabs.camera.gateway.events.CameraEvent;
-import com.kyvislabs.camera.gateway.mediamtx.MediaMtxClient;
-import com.kyvislabs.camera.gateway.mediamtx.Timeline;
-import com.kyvislabs.camera.gateway.mediamtx.PathConfigs;
-import com.kyvislabs.camera.gateway.config.LiveTransport;
-import com.kyvislabs.camera.gateway.config.TranscodeProfile;
-import com.kyvislabs.camera.gateway.transcode.TranscodeRoute;
-import com.kyvislabs.camera.gateway.transcode.TranscodeService;
+import com.kyvislabs.camera.gateway.CameraOps;
 
 /**
  * Gateway half of the camera components. The browser never learns anything it could use for
  * another camera: each request is checked against the session user's roles and answered with
- * tokens scoped to exactly the paths asked for.
+ * tokens scoped to exactly the paths asked for. The work is {@link CameraOps}, shared with the
+ * gateway's Manage page.
  *
  * <p>Protocol: the client fires {@code camera-request} with {@code {id, op, ...}} and receives
  * {@code camera-response} with the same {@code id}. Ops: {@code live}, {@code timeline},
- * {@code playback}, {@code bookmark}.
+ * {@code playback}, {@code bookmark}, {@code snapshot}, {@code ptz}.
  */
 public class CameraComponentDelegate extends ComponentModelDelegate {
     public static final String REQUEST = "camera-request";
     public static final String RESPONSE = "camera-response";
 
-    private static final Duration LIVE_TTL = Duration.ofMinutes(10);
-    private static final Duration PLAYBACK_TTL = Duration.ofMinutes(30);
-    private static final double MAX_WINDOW_SEC = 900;
+    private final CameraOps ops;
 
-    private final CameraServices services;
-
-    public CameraComponentDelegate(Component component, CameraServices services) {
+    public CameraComponentDelegate(Component component, CameraOps ops) {
         super(component);
-        this.services = services;
+        this.ops = ops;
     }
 
     @Override
@@ -72,13 +52,20 @@ public class CameraComponentDelegate extends ComponentModelDelegate {
         JsonObject res = new JsonObject();
         res.add("id", req.get("id"));
         try {
+            Collection<String> roles = roles();
+            String user = user().map(WebAuthUser::getUserName).orElse("");
             String op = req.has("op") ? req.get("op").getAsString() : "";
-            switch (op) {
-                case "live" -> live(req, res);
-                case "timeline" -> timeline(req, res);
-                case "playback" -> playback(req, res);
-                case "bookmark" -> addBookmark(req, res);
+            JsonObject out = switch (op) {
+                case "live" -> ops.live(req, user, cfg -> CameraAccess.canView(cfg, roles));
+                case "timeline" -> ops.timeline(req, user, cfg -> CameraAccess.canPlayback(cfg, roles));
+                case "playback" -> ops.playback(req, user, cfg -> CameraAccess.canPlayback(cfg, roles));
+                case "bookmark" -> ops.bookmark(req, user, "user", cfg -> CameraAccess.canView(cfg, roles));
+                case "snapshot" -> ops.snapshot(req, user, cfg -> CameraAccess.canView(cfg, roles));
+                case "ptz" -> ops.ptz(req, cfg -> CameraAccess.canView(cfg, roles));
                 default -> throw new IllegalArgumentException("unknown op '" + op + "'");
+            };
+            for (Map.Entry<String, JsonElement> e : out.entrySet()) {
+                res.add(e.getKey(), e.getValue());
             }
             res.addProperty("ok", true);
         } catch (Exception e) {
@@ -88,279 +75,6 @@ public class CameraComponentDelegate extends ComponentModelDelegate {
         fireEvent(RESPONSE, res);
     }
 
-    /**
-     * {@code {cameras: [{camera, quality, maxHeight?}], transport?, accept?: [codec...],
-     * acceptMedia?: [codec...]}} -> {@code {streams: {camera: {transport, url, quality, codecs,
-     * transcoded?, error?}}}}. One round trip for a whole wall.
-     *
-     * <p>{@code quality} is {@code main}, {@code sub} or a transcode profile name. {@code transport}
-     * is {@code hls}, {@code webrtc} or {@code auto} (the gateway's default). {@code accept} lists
-     * the video codecs the browser decodes over WebRTC, {@code acceptMedia} those it plays from
-     * HLS; a stream in any other codec than the chosen transport's list is transcoded to a profile
-     * sized to {@code maxHeight} (the viewer's height in device pixels).
-     */
-    private void live(JsonObject req, JsonObject res) {
-        JsonObject streams = new JsonObject();
-        Collection<String> roles = roles();
-        String user = user().map(WebAuthUser::getUserName).orElse("");
-        boolean hls = hls(req);
-        Set<String> accept = hls ? codecs(req, "acceptMedia") : codecs(req, "accept");
-        for (JsonElement el : requested(req)) {
-            JsonObject item = el.getAsJsonObject();
-            String camera = item.get("camera").getAsString();
-            String quality = item.has("quality") ? item.get("quality").getAsString() : "main";
-            int maxHeight = item.has("maxHeight") ? item.get("maxHeight").getAsInt() : 0;
-            JsonObject out = new JsonObject();
-            Optional<CameraConfig> cfg = services.manager().camera(camera);
-            if (cfg.isEmpty()) {
-                out.addProperty("error", "no camera named '" + camera + "'");
-            } else if (!CameraAccess.canView(cfg.get(), roles)) {
-                out.addProperty("error", "not permitted");
-            } else {
-                TranscodeService.Choice c = services.transcoder().live(camera, cfg.get(), quality, accept, maxHeight);
-                if (c.error() != null) {
-                    out.addProperty("error", c.error());
-                } else {
-                    String token = services.tokens().mint(Set.of(c.path()), Set.of(TokenService.Action.READ), LIVE_TTL, user);
-                    out.addProperty("transport", hls ? "hls" : "webrtc");
-                    out.addProperty("url", hls ? services.manager().hlsUrl(c.path(), token) : services.manager().whepUrl(c.path(), token));
-                    if (!hls) {
-                        out.addProperty("whep", services.manager().whepUrl(c.path(), token));
-                    }
-                    out.addProperty("quality", c.path().endsWith("/sub") ? "sub" : c.profile() != null ? c.profile() : "main");
-                    out.addProperty("codecs", c.profile() != null ? "H264" : CameraManager.codecs(services.manager().runtime(c.path())));
-                    if (c.profile() != null) {
-                        out.addProperty("transcoded", c.profile());
-                    }
-                }
-            }
-            streams.add(camera, out);
-        }
-        res.add("streams", streams);
-    }
-
-    /** Whether this viewer gets low-latency HLS: asked for, or the gateway's default. */
-    private boolean hls(JsonObject req) {
-        String t = req.has("transport") ? req.get("transport").getAsString() : "auto";
-        return switch (t) {
-            case "hls" -> true;
-            case "webrtc" -> false;
-            default -> services.manager().server().liveTransport() == LiveTransport.HLS;
-        };
-    }
-
-    /** The video codecs the client says it decodes; empty when it did not say. */
-    private static Set<String> accept(JsonObject req) {
-        return codecs(req, "accept");
-    }
-
-    private static Set<String> codecs(JsonObject req, String key) {
-        Set<String> out = new java.util.HashSet<>();
-        if (req.has(key) && req.get(key).isJsonArray()) {
-            req.getAsJsonArray(key).forEach(e -> out.add(e.getAsString()));
-        }
-        return out;
-    }
-
-    /**
-     * {@code {cameras: [name...], start, end}} (epoch ms) -> {@code {timelines: {camera: {spans:
-     * [[startMs, endMs]...], error?}}}}. Adjacent segments are merged so the client draws runs.
-     */
-    private void timeline(JsonObject req, JsonObject res) {
-        Instant start = Instant.ofEpochMilli(req.get("start").getAsLong());
-        Instant end = Instant.ofEpochMilli(req.get("end").getAsLong());
-        Collection<String> roles = roles();
-        JsonObject out = new JsonObject();
-        for (JsonElement el : req.getAsJsonArray("cameras")) {
-            String camera = el.getAsString();
-            JsonObject t = new JsonObject();
-            Optional<CameraConfig> cfg = services.manager().camera(camera);
-            if (cfg.isEmpty()) {
-                t.addProperty("error", "no camera named '" + camera + "'");
-            } else if (!CameraAccess.canPlayback(cfg.get(), roles)) {
-                t.addProperty("error", "not permitted");
-            } else {
-                List<MediaMtxClient.Span> recorded = new ArrayList<>();
-                try {
-                    recorded.addAll(services.manager().client().listRecordings(PathConfigs.mainPath(camera), start, end));
-                } catch (Exception e) {
-                    t.addProperty("error", "recordings unavailable: " + e.getMessage());
-                }
-                JsonArray markers = new JsonArray();
-                try {
-                    for (CameraEvent ev : services.events().list(camera, start.toEpochMilli(), end.toEpochMilli())) {
-                        // an exported clip is playable even after the buffer it came from expired
-                        for (CameraEvent.ClipPart part : ev.clips()) {
-                            recorded.add(new MediaMtxClient.Span(Instant.ofEpochMilli(part.startMs()),
-                                (part.endMs() - part.startMs()) / 1000.0));
-                        }
-                        markers.add(marker(ev));
-                    }
-                } catch (Exception e) {
-                    t.addProperty("error", "events unavailable: " + e.getMessage());
-                }
-                t.add("spans", spans(Timeline.merge(recorded, 1500)));
-                t.add("markers", markers);
-            }
-            out.add(camera, t);
-        }
-        res.add("timelines", out);
-    }
-
-    /**
-     * {@code {cameras: [name...], start (ms), duration (s), quality?, maxHeight?, accept?}} ->
-     * {@code {streams: {camera: {url, start, duration, codecs, transcoded?}}}}.
-     * The URL is a self-contained MP4 of that window; MediaMTX's playback server does not do
-     * range requests, so the client seeks by asking for a new window, not within one.
-     *
-     * <p>{@code accept} lists the codecs the browser plays in a {@code <video>}; a recording in
-     * any other codec, or a {@code quality} naming a profile, is served by the gateway's
-     * transcoder instead, in windows of at most {@link TranscodeRoute#MAX_WINDOW_SEC}.
-     */
-    private void playback(JsonObject req, JsonObject res) {
-        long startMs = req.get("start").getAsLong();
-        double duration = Math.min(req.get("duration").getAsDouble(), MAX_WINDOW_SEC);
-        String quality = req.has("quality") ? req.get("quality").getAsString() : "main";
-        int maxHeight = req.has("maxHeight") ? req.get("maxHeight").getAsInt() : 0;
-        Set<String> accept = accept(req);
-        Collection<String> roles = roles();
-        String user = user().map(WebAuthUser::getUserName).orElse("");
-        JsonObject out = new JsonObject();
-        for (JsonElement el : req.getAsJsonArray("cameras")) {
-            String camera = el.getAsString();
-            JsonObject s = new JsonObject();
-            Optional<CameraConfig> cfg = services.manager().camera(camera);
-            if (cfg.isEmpty()) {
-                s.addProperty("error", "no camera named '" + camera + "'");
-            } else if (!CameraAccess.canPlayback(cfg.get(), roles)) {
-                s.addProperty("error", "not permitted");
-            } else {
-                String path = PathConfigs.mainPath(camera);
-                String token = services.tokens().mint(Set.of(path), Set.of(TokenService.Action.PLAYBACK),
-                    PLAYBACK_TTL, user);
-                s.addProperty("codecs", CameraManager.codecs(services.manager().runtime(path)));
-                // MediaMTX's segments around the request: to step a start that falls in the seam
-                // between two segments onto the next one (see Timeline.snapStart), and to know
-                // whether MediaMTX still has this time at all.
-                List<MediaMtxClient.Span> near = segmentsNear(path, startMs);
-                long start = Timeline.snapStart(near, startMs, SEAM_MS);
-                boolean recorded = near.stream().anyMatch(sp -> Timeline.ceilMillis(sp.start()) <= start
-                    && start < sp.end().toEpochMilli());
-                CameraEvent clip = recorded ? null : clipCovering(camera, start);
-                TranscodeProfile tx = clip == null ? services.transcoder().forPlayback(camera, quality, accept, maxHeight) : null;
-                if (clip != null) {
-                    // MediaMTX no longer has this (buffer expired); serve the exported clip, which
-                    // starts at the clip part's start rather than the requested time
-                    CameraEvent.ClipPart part = clip.clipAt(start);
-                    s.addProperty("url", "/data/camera/clip?camera=" + camera + "&id=" + clip.id()
-                        + "&file=" + URLEncoder.encode(part.file(), StandardCharsets.UTF_8) + "&token=" + token);
-                    s.addProperty("start", part.startMs());
-                    s.addProperty("duration", (part.endMs() - part.startMs()) / 1000.0);
-                } else if (tx != null) {
-                    double d = Math.min(duration, TranscodeRoute.MAX_WINDOW_SEC);
-                    s.addProperty("url", "/data/camera/transcode?camera=" + camera + "&start=" + start + "&duration=" + d
-                        + "&profile=" + URLEncoder.encode(tx.name(), StandardCharsets.UTF_8) + "&token=" + token);
-                    s.addProperty("start", start);
-                    s.addProperty("duration", d);
-                    s.addProperty("transcoded", tx.name());
-                    s.addProperty("codecs", "H264, MPEG-4 Audio");
-                } else {
-                    // as recorded, but through the gateway's cache: served with a length and byte
-                    // ranges, which a browser needs to start a window with audio before it has all
-                    // of it, and to seek within it
-                    double d = Math.min(duration, TranscodeService.MAX_COPY_WINDOW_SEC);
-                    s.addProperty("url", "/data/camera/window?camera=" + camera + "&start=" + start + "&duration=" + d
-                        + "&token=" + token);
-                    s.addProperty("start", start);
-                    s.addProperty("duration", d);
-                }
-            }
-            out.add(camera, s);
-        }
-        res.add("streams", out);
-    }
-
-    /** Longest seam between two of MediaMTX's segments that a playback start is stepped across. */
-    private static final long SEAM_MS = 1500;
-
-    /** MediaMTX's recording segments overlapping [t - 1 s, t + SEAM_MS + 1 s]; empty when it cannot say. */
-    private List<MediaMtxClient.Span> segmentsNear(String path, long t) {
-        try {
-            return services.manager().client().listRecordings(path, Instant.ofEpochMilli(t - 1000),
-                Instant.ofEpochMilli(t + SEAM_MS + 1000));
-        } catch (Exception e) {
-            log.debugf("recording lookup failed for %s: %s", path, e.getMessage());
-            return List.of();
-        }
-    }
-
-    /**
-     * The exported clip containing t, for a time MediaMTX itself no longer has (buffer expired).
-     */
-    private CameraEvent clipCovering(String camera, long t) {
-        try {
-            for (CameraEvent ev : services.events().list(camera, t - 1, t + 1)) {
-                if (ev.clipAt(t) != null) {
-                    return ev;
-                }
-            }
-        } catch (Exception e) {
-            log.debugf("clip lookup failed for %s: %s", camera, e.getMessage());
-        }
-        return null;
-    }
-
-    /**
-     * {@code {camera, label, time?}} -> a bookmark spanning 10 s either side of {@code time}
-     * (default now), attributed to the session user.
-     */
-    private void addBookmark(JsonObject req, JsonObject res) throws Exception {
-        String camera = req.get("camera").getAsString();
-        CameraConfig cfg = services.manager().camera(camera)
-            .orElseThrow(() -> new IllegalArgumentException("no camera named '" + camera + "'"));
-        if (!CameraAccess.canView(cfg, roles())) {
-            throw new IllegalArgumentException("not permitted");
-        }
-        long t = req.has("time") && !req.get("time").isJsonNull() ? req.get("time").getAsLong() : System.currentTimeMillis();
-        String label = req.has("label") ? req.get("label").getAsString() : "";
-        CameraEvent b = services.events().addBookmark(camera, label, t - 10_000, t + 10_000, false,
-            user().map(WebAuthUser::getUserName).orElse(""), "user");
-        res.add("bookmark", marker(b));
-    }
-
-    private static JsonObject marker(CameraEvent e) {
-        JsonObject m = new JsonObject();
-        m.addProperty("id", e.id());
-        m.addProperty("kind", e.kind() == CameraEvent.Kind.EVENT ? "event" : "bookmark");
-        m.addProperty("t", e.startMs());
-        if (!e.open()) {
-            m.addProperty("end", e.endMs());
-        }
-        m.addProperty("label", e.label());
-        m.addProperty("source", e.source());
-        return m;
-    }
-
-    private static JsonArray spans(List<long[]> runs) {
-        JsonArray arr = new JsonArray();
-        for (long[] r : runs) {
-            JsonArray pair = new JsonArray();
-            pair.add(r[0]);
-            pair.add(r[1]);
-            arr.add(pair);
-        }
-        return arr;
-    }
-
-    private static JsonArray requested(JsonObject req) {
-        if (req.has("cameras") && req.get("cameras").isJsonArray()) {
-            return req.getAsJsonArray("cameras");
-        }
-        JsonArray one = new JsonArray();
-        one.add(req);
-        return one;
-    }
-
     private Optional<WebAuthUser> user() {
         return component.getSession().getWebAuthStatus().getUser();
     }
@@ -368,5 +82,4 @@ public class CameraComponentDelegate extends ComponentModelDelegate {
     private Collection<String> roles() {
         return user().<Collection<String>>map(WebAuthUser::getRoles).orElse(List.of());
     }
-
 }

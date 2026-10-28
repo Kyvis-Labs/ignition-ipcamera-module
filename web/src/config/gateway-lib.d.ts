@@ -3,13 +3,13 @@
 // and these signatures follow its 8.3 source (Platform/gateway-api-web/ignition-gateway-lib).
 // Keep this file to what the pages import.
 declare module "@inductiveautomation/ignition-gateway-lib" {
-    import type { ComponentType, ReactElement, ReactNode } from "react";
+    import type { ComponentType, ReactNode } from "react";
     import type { UseFormReturn } from "react-hook-form";
     import type { SerializedError } from "@reduxjs/toolkit";
     import type {
         Api, BaseQueryFn, FetchArgs, FetchBaseQueryError, FetchBaseQueryMeta, coreModuleName, reactHooksModuleName,
     } from "@reduxjs/toolkit/query/react";
-    import type { ColumnDef, DataGridActionButtons, yup } from "@inductiveautomation/ignition-web-ui";
+    import type { ColumnDef, DataGridActionButtons, MenuItem, yup } from "@inductiveautomation/ignition-web-ui";
 
     // ---- the gateway's RTK Query API ------------------------------------------------------------
 
@@ -111,12 +111,18 @@ declare module "@inductiveautomation/ignition-gateway-lib" {
         defaultValues?: Record<string, unknown>;
     }
 
-    export interface ShowMoreItem {
-        text: string;
-        onClick(row: any): void;
-        icon?: () => ReactElement;
-        order?: number;
+    /** Where the grid puts its own items in the row menu; a custom item without an order lands between DUPLICATE and TOGGLE. */
+    export enum ShowMoreOrder {
+        EDIT = -999,
+        RENAME = -998,
+        DUPLICATE = -997,
+        TOGGLE = 997,
+        RESOURCE_DEFINITIONS = 998,
+        DELETE = 999,
     }
+
+    /** react-router's Link in the gateway's styling; paths are absolute without the /app prefix. */
+    export const Link: ComponentType<{ to: string; children?: ReactNode; className?: string; onClick?(): void }>;
 
     /** A step of the create wizard (ExtensibleWorkflowStep): the web-ui wizard step plus validation. */
     export interface WorkflowStep {
@@ -140,7 +146,8 @@ declare module "@inductiveautomation/ignition-gateway-lib" {
         formDefaults?: Record<string, unknown>;
         actionButtons?: DataGridActionButtons[] | ((createButton: DataGridActionButtons) => DataGridActionButtons[]);
         blankStateConfig?: { label: string; content: string; icon?: ReactNode; primaryLabel?: string };
-        showMore?: ShowMoreItem[] | ((row: any) => ShowMoreItem[]);
+        /** Extra items for each row's "..." menu (web-ui MenuItem); the grid adds Edit, Enable/Disable and Delete around them. */
+        showMore?: [] | MenuItem[] | ((row: any, collection?: string, isOpen?: boolean) => MenuItem[] | Promise<MenuItem[]>);
         transformData?(items: ConfigResponseItem[]): unknown[];
         /** Steps of the create wizard (default: one step showing CreateForm). Called on every render. */
         createSteps?(wizardOpen: boolean): WorkflowStep[];

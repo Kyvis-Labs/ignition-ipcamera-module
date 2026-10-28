@@ -1,4 +1,5 @@
 import * as React from "react";
+import { Camera, Chevron, ChevronUp, Move, Pause, Play, Rewind, Star } from "./Icons";
 
 export const ZOOMS = [
     { label: "1h", ms: 3600e3 },
@@ -21,34 +22,82 @@ export interface ControlsProps {
     onZoom: (ms: number) => void;
     /** Present when the user may bookmark; omitted hides the button. */
     onBookmark?: () => void;
+    /** Present when the user may take a snapshot of the shown moment; omitted hides the button. */
+    onSnapshot?: () => void;
+    /** Present when the camera has PTZ: toggles the pad over the picture. */
+    onPtzToggle?: () => void;
+    ptzOpen?: boolean;
+    /** Present when the toolbar and timeline may be hidden; the host shows a restore tab over the picture. */
+    onCollapse?: () => void;
+    /** Anything the host wants at the right end (a pager, say). */
+    children?: React.ReactNode;
 }
 
-const btn: React.CSSProperties = {
-    background: "#2b2e33", color: "#e8eaed", border: "1px solid #3c4043", borderRadius: 4,
-    font: "12px/20px sans-serif", padding: "1px 8px", cursor: "pointer",
-};
+/** A native select dressed as the control primitive. */
+export function Select(props: { value: string | number; title: string; onChange: (v: string) => void; disabled?: boolean;
+                                children: React.ReactNode; className?: string }) {
+    return (
+        <span className={`kcam-selwrap ${props.className ?? ""}`}>
+            <select className="kcam-btn" value={props.value} title={props.title} aria-label={props.title} disabled={props.disabled}
+                onChange={e => props.onChange(e.target.value)}>
+                {props.children}
+            </select>
+            <Chevron small />
+        </span>
+    );
+}
 
+/**
+ * The toolbar. Nothing moves under the hand: play/pause and speed stay in place and dim in
+ * live mode instead of disappearing, so bookmark and snapshot keep their positions.
+ */
 export function Controls(props: ControlsProps) {
     const { live, playing, rate, zoomMs } = props;
     return (
-        <div style={{ display: "flex", gap: 6, alignItems: "center", padding: "4px 6px", background: "#16181b", flexWrap: "wrap" }}>
-            <button style={{ ...btn, background: live ? "#c62828" : btn.background }} onClick={props.onLive} title="Go to live">● Live</button>
-            <button style={btn} onClick={props.onRewind} title="Back 30 seconds">⟲ 30s</button>
-            {!live && (
-                <>
-                    <button style={btn} onClick={props.onPlayPause} title={playing ? "Pause" : "Play"}>{playing ? "❚❚" : "▶"}</button>
-                    <select style={btn} value={rate} onChange={e => props.onRate(Number(e.target.value))} title="Speed">
-                        {RATES.map(r => <option key={r} value={r}>{r}×</option>)}
-                    </select>
-                </>
-            )}
+        <div className="kcam-toolbar" role="toolbar" aria-label={live ? "Live controls" : "Playback controls"}>
+            <button className={`kcam-btn${live ? " kcam-selected" : ""}`} onClick={props.onLive} title="Go to live" aria-pressed={live}>
+                <span className="kcam-livedot" />Live
+            </button>
+            <button className="kcam-btn" onClick={props.onRewind} title="Back 30 seconds"><Rewind />30s</button>
+            <span className="kcam-vr" />
+            <button className="kcam-btn kcam-icon" onClick={props.onPlayPause} disabled={live} title={playing ? "Pause" : "Play"} aria-label={playing ? "Pause" : "Play"}>
+                {playing ? <Pause /> : <Play />}
+            </button>
+            <Select value={rate} title="Speed" disabled={live} onChange={v => props.onRate(Number(v))}>
+                {RATES.map(r => <option key={r} value={r}>{r}×</option>)}
+            </Select>
+            {(props.onBookmark || props.onSnapshot || props.onPtzToggle) && <span className="kcam-vr" />}
             {props.onBookmark && (
-                <button style={btn} onClick={props.onBookmark} title="Bookmark this moment">★</button>
+                <button className="kcam-btn kcam-icon" onClick={props.onBookmark} title="Bookmark this moment" aria-label="Bookmark this moment"><Star /></button>
             )}
-            <span style={{ flex: 1 }} />
-            <select style={btn} value={zoomMs} onChange={e => props.onZoom(Number(e.target.value))} title="Timeline range">
+            {props.onSnapshot && (
+                <button className="kcam-btn kcam-icon" onClick={props.onSnapshot} title="Snapshot of this moment (opens in a new tab)" aria-label="Snapshot"><Camera /></button>
+            )}
+            {props.onPtzToggle && (
+                <button className={`kcam-btn kcam-icon${props.ptzOpen ? " kcam-selected" : ""}`} onClick={props.onPtzToggle}
+                    title={props.ptzOpen ? "Hide pan/tilt/zoom controls" : "Show pan/tilt/zoom controls"} aria-label="Pan/tilt/zoom controls" aria-pressed={!!props.ptzOpen}>
+                    <Move />
+                </button>
+            )}
+            <span className="kcam-spacer" />
+            {props.children}
+            <Select value={zoomMs} title="Timeline range" onChange={v => props.onZoom(Number(v))}>
                 {ZOOMS.map(z => <option key={z.ms} value={z.ms}>{z.label}</option>)}
-            </select>
+            </Select>
+            {props.onCollapse && (
+                <button className="kcam-btn kcam-icon" onClick={props.onCollapse} title="Hide controls and timeline" aria-label="Hide controls and timeline">
+                    <ChevronUp style={{ transform: "rotate(180deg)" }} />
+                </button>
+            )}
         </div>
+    );
+}
+
+/** The tab over the picture that brings a hidden toolbar back. */
+export function RestoreTab(props: { onClick: () => void }) {
+    return (
+        <button className="kcam-btn kcam-icon kcam-restore" onClick={props.onClick} title="Show controls and timeline" aria-label="Show controls and timeline">
+            <ChevronUp />
+        </button>
     );
 }

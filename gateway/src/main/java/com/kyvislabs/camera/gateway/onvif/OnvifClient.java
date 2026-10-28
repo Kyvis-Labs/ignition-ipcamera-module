@@ -34,6 +34,7 @@ public class OnvifClient {
     static final String DEVICE_NS = "http://www.onvif.org/ver10/device/wsdl";
     static final String MEDIA_NS = "http://www.onvif.org/ver10/media/wsdl";
     static final String EVENTS_NS = "http://www.onvif.org/ver10/events/wsdl";
+    static final String PTZ_NS = "http://www.onvif.org/ver20/ptz/wsdl";
     static final String SCHEMA_NS = "http://www.onvif.org/ver10/schema";
     static final String TOPIC_NS = "http://docs.oasis-open.org/wsn/t-1";
 
@@ -44,6 +45,7 @@ public class OnvifClient {
     private Duration clockOffset = Duration.ZERO;
     private String mediaUrl;
     private String eventsUrl;
+    private String ptzUrl;
 
     public OnvifClient(String deviceUrl, String user, String password) {
         this.deviceUrl = deviceUrl;
@@ -69,6 +71,9 @@ public class OnvifClient {
     public record DeviceInfo(String manufacturer, String model, String firmware, String serial) {
     }
 
+    public record Preset(String token, String name) {
+    }
+
     /**
      * Measures the camera's clock against ours (digests carry a timestamp the camera checks)
      * and finds the media and events service addresses.
@@ -92,8 +97,71 @@ public class OnvifClient {
             true, null, Duration.ofSeconds(5));
         Element media = Soap.first(caps, "Media");
         Element events = Soap.first(caps, "Events");
+        Element ptz = Soap.first(caps, "PTZ");
         mediaUrl = media == null ? deviceUrl : fixHost(Soap.text(media, "XAddr"));
         eventsUrl = events == null ? null : fixHost(Soap.text(events, "XAddr"));
+        String ptzAddr = ptz == null ? null : Soap.text(ptz, "XAddr");
+        ptzUrl = ptzAddr == null || ptzAddr.isBlank() ? null : fixHost(ptzAddr);
+    }
+
+    // ---- PTZ (ver20) ----
+
+    public boolean supportsPtz() {
+        return ptzUrl != null;
+    }
+
+    /** Starts moving at the given speeds (each -1..1) until {@link #stopMove}. */
+    public void continuousMove(String profile, double pan, double tilt, double zoom) throws IOException {
+        String body = "<ContinuousMove xmlns=\"" + PTZ_NS + "\"><ProfileToken>" + Soap.xml(profile) + "</ProfileToken><Velocity>"
+            + "<PanTilt xmlns=\"" + SCHEMA_NS + "\" x=\"" + num(pan) + "\" y=\"" + num(tilt) + "\"/>"
+            + "<Zoom xmlns=\"" + SCHEMA_NS + "\" x=\"" + num(zoom) + "\"/></Velocity></ContinuousMove>";
+        call(ptzUrl, body, true, null, Duration.ofSeconds(5));
+    }
+
+    public void stopMove(String profile) throws IOException {
+        call(ptzUrl, "<Stop xmlns=\"" + PTZ_NS + "\"><ProfileToken>" + Soap.xml(profile) + "</ProfileToken>"
+            + "<PanTilt>true</PanTilt><Zoom>true</Zoom></Stop>", true, null, Duration.ofSeconds(5));
+    }
+
+    public void gotoHome(String profile) throws IOException {
+        call(ptzUrl, "<GotoHomePosition xmlns=\"" + PTZ_NS + "\"><ProfileToken>" + Soap.xml(profile) + "</ProfileToken></GotoHomePosition>",
+            true, null, Duration.ofSeconds(5));
+    }
+
+    public List<Preset> presets(String profile) throws IOException {
+        Document d = call(ptzUrl, "<GetPresets xmlns=\"" + PTZ_NS + "\"><ProfileToken>" + Soap.xml(profile) + "</ProfileToken></GetPresets>",
+            true, null, Duration.ofSeconds(5));
+        return parsePresets(d);
+    }
+
+    static List<Preset> parsePresets(Document d) {
+        List<Preset> out = new ArrayList<>();
+        for (Element p : Soap.all(d, "Preset")) {
+            String name = Soap.text(p, "Name");
+            out.add(new Preset(p.getAttribute("token"), name == null ? "" : name));
+        }
+        return out;
+    }
+
+    public void gotoPreset(String profile, String preset) throws IOException {
+        call(ptzUrl, "<GotoPreset xmlns=\"" + PTZ_NS + "\"><ProfileToken>" + Soap.xml(profile) + "</ProfileToken>"
+            + "<PresetToken>" + Soap.xml(preset) + "</PresetToken></GotoPreset>", true, null, Duration.ofSeconds(5));
+    }
+
+    /** Saves the current position under {@code name}; returns the preset token the camera assigned. */
+    public String setPreset(String profile, String name) throws IOException {
+        Document d = call(ptzUrl, "<SetPreset xmlns=\"" + PTZ_NS + "\"><ProfileToken>" + Soap.xml(profile) + "</ProfileToken>"
+            + "<PresetName>" + Soap.xml(name) + "</PresetName></SetPreset>", true, null, Duration.ofSeconds(5));
+        return Soap.text(d, "PresetToken");
+    }
+
+    public void removePreset(String profile, String preset) throws IOException {
+        call(ptzUrl, "<RemovePreset xmlns=\"" + PTZ_NS + "\"><ProfileToken>" + Soap.xml(profile) + "</ProfileToken>"
+            + "<PresetToken>" + Soap.xml(preset) + "</PresetToken></RemovePreset>", true, null, Duration.ofSeconds(5));
+    }
+
+    private static String num(double v) {
+        return String.format(java.util.Locale.ROOT, "%.3f", v);
     }
 
     public Duration clockOffset() {

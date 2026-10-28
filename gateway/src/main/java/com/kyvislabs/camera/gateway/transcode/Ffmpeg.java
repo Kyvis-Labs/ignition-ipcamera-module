@@ -121,6 +121,25 @@ public final class Ffmpeg {
         return a;
     }
 
+    /**
+     * One frame as a JPEG, scaled to {@code height} rows (never up). {@code offsetSec} skips into
+     * a file input; a live RTSP input decodes from its first keyframe.
+     *
+     * @param output the file name decides the format, so it must end in .jpg
+     */
+    public static List<String> snapshot(MediaServerConfig s, String input, boolean rtsp, double offsetSec, int height, String output) {
+        List<String> a = new ArrayList<>(List.of(s.ffmpegPath(), "-hide_banner", "-loglevel", "error", "-nostats", "-y"));
+        if (rtsp) {
+            a.addAll(List.of("-rtsp_transport", "tcp"));
+        }
+        if (offsetSec > 0) {
+            a.addAll(List.of("-ss", String.format(java.util.Locale.ROOT, "%.3f", offsetSec)));
+        }
+        a.addAll(List.of("-i", input, "-an", "-sn", "-frames:v", "1",
+            "-vf", "scale=-2:'min(" + height + ",ih)'", "-q:v", "3", "-f", "image2", output));
+        return a;
+    }
+
     /** One recording window to a self-contained MP4 (moov first, so a {@code <video>} can seek it). */
     public static List<String> playback(MediaServerConfig s, TranscodeProfile p, String inputUrl, String output) {
         List<String> a = new ArrayList<>(List.of(s.ffmpegPath(), "-hide_banner", "-loglevel", "error", "-nostats", "-y"));

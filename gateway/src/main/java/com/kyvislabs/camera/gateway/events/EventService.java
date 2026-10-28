@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
@@ -399,6 +400,82 @@ public class EventService {
         return store.list(camera, startMs, endMs);
     }
 
+    public Optional<CameraEvent> get(String camera, String id) throws IOException {
+        return store.get(camera, id);
+    }
+
+    /** Where exportClip writes; may not exist. */
+    public Path exportsFolder(String camera) {
+        return store.folder(camera).resolve("exports");
+    }
+
+    // ---- management (the gateway's Manage page and scripting) ----
+
+    /**
+     * Keeps or releases an event or bookmark from retention. Protecting one that has no clip
+     * exports it now, while the buffer still has it.
+     */
+    public CameraEvent setProtect(String camera, String id, boolean protect) throws IOException {
+        CameraEvent e = store.get(camera, id).orElseThrow(() -> new IllegalArgumentException("no event " + id));
+        CameraEvent changed = e.withProtect(protect);
+        store.put(changed);
+        if (protect && changed.clips().isEmpty() && !changed.open()) {
+            scheduleExport(changed);
+        }
+        return changed;
+    }
+
+    /** Removes one closed event or bookmark with its clips. An open event is still recording. */
+    public void delete(String camera, String id) throws IOException {
+        CameraEvent e = store.get(camera, id).orElseThrow(() -> new IllegalArgumentException("no event " + id));
+        if (e.open()) {
+            throw new IllegalStateException("event is still open");
+        }
+        store.removeIf(camera, x -> x.id().equals(id));
+    }
+
+    /** Removes every closed event and bookmark with their clips, and the exports folder. Returns the count. */
+    public int deleteAll(String camera) throws IOException {
+        int n = store.removeIf(camera, e -> !e.open());
+        Path exports = exportsFolder(camera);
+        if (Files.isDirectory(exports)) {
+            try (var files = Files.list(exports)) {
+                for (Path f : (Iterable<Path>) files::iterator) {
+                    Files.deleteIfExists(f);
+                }
+            }
+            Files.deleteIfExists(exports);
+        }
+        return n;
+    }
+
+    /** Exports the event's clip now, synchronously; fails when MediaMTX no longer has the window. */
+    public CameraEvent exportNow(String camera, String id) throws IOException {
+        CameraEvent e = store.get(camera, id).orElseThrow(() -> new IllegalArgumentException("no event " + id));
+        if (e.open()) {
+            throw new IllegalStateException("event is still open");
+        }
+        CameraEvent done = e.withClips(exportParts(e));
+        store.put(done);
+        return done;
+    }
+
+    /**
+     * Events in [startMs, endMs) whose video is only in MediaMTX's buffer: still open, or due a
+     * clip that has not been exported yet. Deleting the buffer under them loses the clip.
+     */
+    public List<CameraEvent> unexportedOverlapping(String camera, long startMs, long endMs) throws IOException {
+        CameraConfig cfg = cameras.get(camera);
+        List<CameraEvent> out = new ArrayList<>();
+        for (CameraEvent e : store.list(camera, startMs, endMs)) {
+            boolean wantsClip = cfg != null && (e.kind() == CameraEvent.Kind.EVENT ? cfg.preRollSec() > 0 : e.protect());
+            if (e.open() || (wantsClip && e.clips().isEmpty())) {
+                out.add(e);
+            }
+        }
+        return out;
+    }
+
     /** Copies [startMs, endMs] out of MediaMTX into a file, synchronously. */
     public Path exportClip(String camera, long startMs, long endMs) throws IOException {
         Path dir = Files.createDirectories(store.folder(camera).resolve("exports"));
@@ -406,6 +483,82 @@ public class EventService {
         hooks.client().download(PathConfigs.mainPath(camera), Instant.ofEpochMilli(startMs),
             (endMs - startMs) / 1000.0, file);
         return file;
+    }
+
+    /** An exported file as listed. */
+    public record Export(String file, long bytes, long modifiedMs) {
+    }
+
+    /** Export file names: a time range plus an optional part number; nothing that could be a path. */
+    static final java.util.regex.Pattern EXPORT_NAME = java.util.regex.Pattern.compile("[A-Za-z0-9][A-Za-z0-9_.-]{0,120}\\.mp4");
+
+    /**
+     * Copies a time range out of MediaMTX into the exports folder, one file per recorded run
+     * inside it (the playback server stops at a gap), named by the range it covers:
+     * {@code 2026-10-28T10-00-00Z_2026-10-28T10-15-00Z.mp4}, with {@code -2}, {@code -3} for further runs.
+     */
+    public List<Path> exportRange(String camera, long startMs, long endMs) throws IOException {
+        if (endMs <= startMs) {
+            throw new IllegalArgumentException("end must be after start");
+        }
+        Path dir = Files.createDirectories(store.folder(camera).resolve("exports"));
+        String path = PathConfigs.mainPath(camera);
+        List<Path> out = new ArrayList<>();
+        int i = 0;
+        for (MediaMtxClient.Span span : hooks.client().listRecordings(path, Instant.ofEpochMilli(startMs), Instant.ofEpochMilli(endMs))) {
+            long a = Math.max(startMs, span.start().toEpochMilli());
+            long b = Math.min(endMs, span.end().toEpochMilli());
+            if (b - a < 500) {
+                continue;
+            }
+            i++;
+            String name = stamp(a) + "_" + stamp(b) + (i == 1 ? "" : "-" + i) + ".mp4";
+            Path file = dir.resolve(name);
+            hooks.client().download(path, Instant.ofEpochMilli(a), (b - a) / 1000.0, file);
+            out.add(file);
+        }
+        if (out.isEmpty()) {
+            throw new IOException("nothing recorded in that range");
+        }
+        return out;
+    }
+
+    private static String stamp(long ms) {
+        return Instant.ofEpochMilli(ms).truncatedTo(java.time.temporal.ChronoUnit.SECONDS).toString().replace(":", "-");
+    }
+
+    public List<Export> listExports(String camera) throws IOException {
+        Path dir = exportsFolder(camera);
+        List<Export> out = new ArrayList<>();
+        if (!Files.isDirectory(dir)) {
+            return out;
+        }
+        try (var files = Files.list(dir)) {
+            for (Path f : (Iterable<Path>) files::iterator) {
+                String name = f.getFileName().toString();
+                if (EXPORT_NAME.matcher(name).matches() && Files.isRegularFile(f)) {
+                    out.add(new Export(name, Files.size(f), Files.getLastModifiedTime(f).toMillis()));
+                }
+            }
+        }
+        out.sort((x, y) -> Long.compare(y.modifiedMs(), x.modifiedMs()));
+        return out;
+    }
+
+    /** The export's path, after checking the name is one of ours. */
+    public Path exportFile(String camera, String file) {
+        if (file == null || !EXPORT_NAME.matcher(file).matches()) {
+            throw new IllegalArgumentException("not an export file name");
+        }
+        Path p = exportsFolder(camera).resolve(file).normalize();
+        if (!p.startsWith(exportsFolder(camera))) {
+            throw new IllegalArgumentException("not an export file name");
+        }
+        return p;
+    }
+
+    public boolean deleteExport(String camera, String file) throws IOException {
+        return Files.deleteIfExists(exportFile(camera, file));
     }
 
     /** Periodic work from the reconcile loop: event splitting and hourly retention. */
@@ -475,29 +628,34 @@ public class EventService {
      * server stops a download at the first gap, so one request would silently truncate an
      * event that spans a camera reconnect.
      */
+    private List<CameraEvent.ClipPart> exportParts(CameraEvent e) throws IOException {
+        Files.createDirectories(store.folder(e.camera()));
+        String path = PathConfigs.mainPath(e.camera());
+        List<CameraEvent.ClipPart> parts = new ArrayList<>();
+        int i = 0;
+        for (MediaMtxClient.Span span : hooks.client().listRecordings(path,
+            Instant.ofEpochMilli(e.startMs()), Instant.ofEpochMilli(e.endMs()))) {
+            long a = Math.max(e.startMs(), span.start().toEpochMilli());
+            long b = Math.min(e.endMs(), span.end().toEpochMilli());
+            if (b - a < 500) {
+                continue;
+            }
+            String file = e.id() + (i == 0 ? "" : "-" + i) + ".mp4";
+            hooks.client().download(path, Instant.ofEpochMilli(a), (b - a) / 1000.0,
+                store.folder(e.camera()).resolve(file));
+            parts.add(new CameraEvent.ClipPart(file, a, b));
+            i++;
+        }
+        if (parts.isEmpty()) {
+            throw new IOException("nothing recorded in the event window");
+        }
+        return parts;
+    }
+
+    /** Scheduled export with retries (events close before MediaMTX finishes their last part). */
     private void export(CameraEvent e, int attempt) {
         try {
-            Files.createDirectories(store.folder(e.camera()));
-            String path = PathConfigs.mainPath(e.camera());
-            List<CameraEvent.ClipPart> parts = new ArrayList<>();
-            int i = 0;
-            for (MediaMtxClient.Span span : hooks.client().listRecordings(path,
-                Instant.ofEpochMilli(e.startMs()), Instant.ofEpochMilli(e.endMs()))) {
-                long a = Math.max(e.startMs(), span.start().toEpochMilli());
-                long b = Math.min(e.endMs(), span.end().toEpochMilli());
-                if (b - a < 500) {
-                    continue;
-                }
-                String file = e.id() + (i == 0 ? "" : "-" + i) + ".mp4";
-                hooks.client().download(path, Instant.ofEpochMilli(a), (b - a) / 1000.0,
-                    store.folder(e.camera()).resolve(file));
-                parts.add(new CameraEvent.ClipPart(file, a, b));
-                i++;
-            }
-            if (parts.isEmpty()) {
-                throw new IOException("nothing recorded in the event window");
-            }
-            store.put(e.withClips(parts));
+            store.put(e.withClips(exportParts(e)));
         } catch (Exception ex) {
             if (attempt < 3 && !scheduler.isShutdown()) {
                 try {

@@ -78,6 +78,7 @@ public class EventStore {
             for (CameraEvent.ClipPart part : e.clips()) {
                 Files.deleteIfExists(clipPath(camera, part));
             }
+            Files.deleteIfExists(folder(camera).resolve(e.id() + ".jpg"));
         }
         list.removeAll(gone);
         save(camera, list);

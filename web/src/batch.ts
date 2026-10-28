@@ -1,5 +1,5 @@
 import { mediaCodecs, webrtcCodecs } from "./codecs";
-import { CameraDelegate, LiveStream, stream, TransportPref } from "./delegate";
+import { CameraRequester, LiveStream, stream, TransportPref } from "./requests";
 
 /** "main", "sub" or a transcode profile name. */
 type Quality = string;
@@ -21,7 +21,7 @@ export class LiveBatcher {
     private queue: Pending[] = [];
     private timer: ReturnType<typeof setTimeout> | null = null;
 
-    constructor(private delegate: CameraDelegate, private windowMs = 15) {
+    constructor(private delegate: CameraRequester, private windowMs = 15) {
     }
 
     url(camera: string, quality: Quality, transport: TransportPref = "auto"): Promise<LiveStream> {

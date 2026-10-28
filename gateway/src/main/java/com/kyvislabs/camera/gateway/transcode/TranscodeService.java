@@ -60,6 +60,11 @@ public class TranscodeService {
         this.cacheDir = storage.resolve("transcode-cache");
     }
 
+    /** The cache folder; snapshots share it (and its purge). */
+    public Path cacheDir() {
+        return cacheDir;
+    }
+
     /**
      * What a viewer should be sent: a path and, when it is a transcode, the profile.
      *
@@ -361,6 +366,24 @@ public class TranscodeService {
     /** Generous: a slow CPU transcoding 4K H.265 may run near real time. */
     private static Duration timeout(double durationSec) {
         return Duration.ofSeconds(60 + (long) (durationSec * 3));
+    }
+
+    /** Drops every cached window: after recordings are deleted, a cached copy must not outlive them. */
+    public void clearCache() {
+        if (!Files.isDirectory(cacheDir)) {
+            return;
+        }
+        try (var files = Files.list(cacheDir)) {
+            files.filter(f -> !f.toString().endsWith(".part")).forEach(f -> {
+                try {
+                    Files.deleteIfExists(f);
+                } catch (IOException e) {
+                    log.debugf("could not delete %s: %s", f, e.getMessage());
+                }
+            });
+        } catch (IOException e) {
+            log.debugf("cache clear failed: %s", e.getMessage());
+        }
     }
 
     /** Deletes cached windows older than {@link #CACHE_FOR}; called from the reconcile timer. */
