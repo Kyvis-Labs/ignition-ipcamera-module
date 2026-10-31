@@ -65,7 +65,6 @@ public record MediaServerConfig(
 
     @Description("Base URL browsers use for WebRTC (WHEP) and playback, e.g. https://cams.example.com. "
         + "Blank = through the gateway, which proxies both.")
-    @DefaultValue("https://cams.example.com")
     String publicUrl,
 
     @Description("Control API user, if MediaMTX requires one.")
@@ -144,7 +143,7 @@ public record MediaServerConfig(
 
     public static final MediaServerConfig DEFAULT = new MediaServerConfig(
         ServerMode.AUTO, 8554, 8889, 8189, 9996, 9997, List.of(), "",
-        "http://mediamtx:9997", "http://mediamtx:9996", "http://mediamtx:8889", "https://cams.example.com", "", null, null, "", 15, 10,
+        "http://mediamtx:9997", "http://mediamtx:9996", "http://mediamtx:8889", "", "", null, null, "", 15, 10,
         "/recordings", true, 2, TranscodeEncoder.SOFTWARE, "/dev/dri/renderD128", "veryfast", 10,
         TranscodeProfile.DEFAULTS, "ffmpeg", LiveTransport.HLS, 8888, "http://mediamtx:8888");
 
