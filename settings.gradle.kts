@@ -16,6 +16,6 @@ dependencyResolutionManagement {
 
 enableFeaturePreview("TYPESAFE_PROJECT_ACCESSORS")
 
-rootProject.name = "ignition-camera-module"
+rootProject.name = "ignition-ipcamera-module"
 
 include(":common", ":gateway", ":designer", ":web")

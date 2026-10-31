@@ -13,11 +13,16 @@ The Camera Module provides support for:
 7. Status and ONVIF event tags in a tag provider called `Cameras`
 8. Scripting through `system.camera`
 
+Open Source
+---------------
+
+The Camera Module is an open source project distributed under the Apache 2.0 license. Please feel free to download the source code and contribute. The platform builds include MediaMTX, which is distributed under the MIT license.
+
 Getting Started
 ---------------
 
-1. Build the module, see [Building](#building)
-2. Install the module into Ignition 8.3.9+. Start the gateway with `-Dignition.allowunsignedmodules=true`.
+1. Download the module for your platform from [releases](https://github.com/Kyvis-Labs/ignition-ipcamera-module/releases)
+2. Install the module into Ignition 8.3.9+ and accept its certificate
 3. Log into the Ignition Gateway
 4. Click on `Connections > Cameras > Settings` and check the media server settings. The platform builds need no changes, but `Media Port` (8189, UDP and TCP) must be open in the host firewall to use WebRTC.
 5. Click on `Connections > Cameras > Connections` and click `Create Camera`
@@ -26,11 +31,11 @@ Getting Started
 
 | Module | MediaMTX |
 |---|---|
-| `Camera-windows-x64.unsigned.modl` | Included, Windows x64 |
-| `Camera-linux-x64.unsigned.modl` | Included, Linux x64 |
-| `Camera-linux-arm64.unsigned.modl` | Included, Linux ARM64 |
-| `Camera-macos-arm64.unsigned.modl` | Included, macOS on Apple silicon |
-| `Camera.unsigned.modl` | Not included, see [External MediaMTX](#external-mediamtx) |
+| `Camera-windows-x64.modl` | Included, Windows x64 |
+| `Camera-linux-x64.modl` | Included, Linux x64 |
+| `Camera-linux-arm64.modl` | Included, Linux ARM64 |
+| `Camera-macos-arm64.modl` | Included, macOS on Apple silicon |
+| `Camera.modl` | Not included, see [External MediaMTX](#external-mediamtx) |
 
 ffmpeg is not included. Install it on the gateway host if you need transcoding.
 
@@ -224,7 +229,7 @@ Encoders are CPU, VA-API, Intel Quick Sync and NVIDIA NVENC. A GPU encoder needs
 
 # External MediaMTX
 
-Use `Camera.unsigned.modl` or set `Mode` to `External` to run MediaMTX yourself. MediaMTX needs its `-ffmpeg` image for live transcoding. The module was built against MediaMTX 1.21.2.
+Use `Camera.modl` or set `Mode` to `External` to run MediaMTX yourself. MediaMTX needs its `-ffmpeg` image for live transcoding. The module was built against MediaMTX 1.21.2.
 
 ```yaml
 api: yes
@@ -253,9 +258,13 @@ Requires JDK 17 and Node.js.
 ```
 ./gradlew build                        # Camera.unsigned.modl and unit tests
 ./gradlew build -Pplatform=linux-x64   # one platform build
-scripts/build-all.sh                   # all five
-scripts/deploy.sh                      # build and load on the dev gateway
-scripts/harness.sh                     # run the components without Perspective
+scripts/build-all.sh                   # all five, signed if the key is available
+IGNITION_STACK=/path/to/stack scripts/deploy.sh   # build and load on a dev gateway
+GATEWAY=https://gateway.example.com API_TOKEN_FILE=/path/to/token scripts/harness.sh   # run the components without Perspective
 ```
 
 Unsigned modules need `-Dignition.allowunsignedmodules=true` on the gateway.
+
+# Releases
+
+Pushing a tag such as `v0.2.0` builds and signs all five modules and creates a GitHub release. The workflow needs two repository secrets, `CAMERA_SIGNING_PFX_BASE64` and `CAMERA_SIGNING_PASSWORD`.
