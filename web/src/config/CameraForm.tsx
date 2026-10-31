@@ -59,6 +59,7 @@ const SCHEMA = SchemaUtils.createBackupConfigSchema(yup.object({
         viewRoles: yup.array().of(yup.string().defined()).default([]),
         playbackRoles: yup.array().of(yup.string().defined()).default([]),
         onvifTags: yup.boolean().default(true),
+        recordSubstream: yup.boolean().default(true),
     }),
 }));
 
@@ -132,6 +133,7 @@ export function CameraForm(props: ResourceFormProps) {
     const f = (field: string) => joinByDot(prefix, field);
     const camType = useWatch({ control: context.control, name: f("type") }) as string;
     const recordMode = useWatch({ control: context.control, name: f("recordMode") }) as string;
+    const subUrl = useWatch({ control: context.control, name: f("subUrl") }) as string | undefined;
     const mainUrl = (useWatch({ control: context.control, name: f("mainUrl") }) as string) ?? "";
     const events = recordMode === "EVENT" || recordMode === "TAG";
 
@@ -178,6 +180,11 @@ export function CameraForm(props: ResourceFormProps) {
             <Card title="RECORDING">
                 <FormControlInput input={<SelectInput values={MODES} />} name={f("recordMode")} id="record-mode" label="Record Mode"
                     description="Retention applies per camera: switching to an event or tag mode applies the rolling buffer's retention to existing continuous recordings too." />
+                {recordMode !== "OFF" && !!subUrl?.trim() && (
+                    <FormControlInput input={<Checkbox label="Record the substream as well." defaultValue={context.getValues(f("recordSubstream")) ?? true} />}
+                        name={f("recordSubstream")} id="record-substream" label="Record Substream"
+                        description="A light copy with the same retention. Dragging the timeline plays it; without it, a drag decodes the full resolution recording and is much rougher." />
+                )}
                 {recordMode === "CONTINUOUS" && (
                     <FormControlInput input={<NumericInput min={1} />} name={f("retentionDays")} id="retention-days" label="Keep Recordings (days)" />
                 )}

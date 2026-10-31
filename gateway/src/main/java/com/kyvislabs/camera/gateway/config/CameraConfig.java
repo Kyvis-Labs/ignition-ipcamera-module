@@ -91,7 +91,13 @@ public record CameraConfig(
     @Description("ONVIF: subscribe to the camera's events in any record mode and expose them, with the "
         + "device information, as tags under [Cameras]<camera>/Onvif.")
     @DefaultValue("true")
-    Boolean onvifTags
+    Boolean onvifTags,
+
+    @Description("Records the substream alongside the main stream, whenever the main stream records and "
+        + "with the same retention. Dragging the timeline plays this light copy; without it, a drag "
+        + "decodes the full resolution recording and is much rougher.")
+    @DefaultValue("true")
+    Boolean recordSubstream
 ) {
     public static final ResourceType TYPE = new ResourceType(CameraModule.MODULE_ID, "camera");
 
@@ -103,7 +109,7 @@ public record CameraConfig(
 
     public static final CameraConfig DEFAULT = new CameraConfig(
         CameraType.RTSP, "", "", "", null, "", "tcp", "", RecordMode.CONTINUOUS,
-        7, 10, 10, 60, 30, List.of(), List.of(), List.of(), List.of(), List.of(), true);
+        7, 10, 10, 60, 30, List.of(), List.of(), List.of(), List.of(), List.of(), true, true);
 
     public CameraConfig {
         type = type == null ? CameraType.RTSP : type;
@@ -120,6 +126,7 @@ public record CameraConfig(
         viewRoles = viewRoles == null ? List.of() : List.copyOf(viewRoles);
         playbackRoles = playbackRoles == null ? List.of() : List.copyOf(playbackRoles);
         onvifTags = onvifTags == null || onvifTags;
+        recordSubstream = recordSubstream == null || recordSubstream;
     }
 
     /**

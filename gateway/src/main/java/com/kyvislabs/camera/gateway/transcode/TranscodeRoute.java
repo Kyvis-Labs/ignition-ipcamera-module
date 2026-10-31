@@ -102,7 +102,7 @@ public final class TranscodeRoute {
                 }
                 Path file;
                 try {
-                    file = service.get().window(camera, start, duration);
+                    file = service.get().window(camera, start, duration, "sub".equals(req.getParameter("stream")));
                 } catch (Exception e) {
                     log.warnf("Recording window of %s at %d failed: %s", camera, start, e.getMessage());
                     res.setStatus(HttpServletResponse.SC_BAD_GATEWAY);

@@ -20,8 +20,13 @@ export interface TimelineBarProps {
     viewEnd: number;
     onSeek: (t: number) => void;
     onPan: (viewEnd: number) => void;
+    /** Dragging a recorded span: the time to show, and whether the drag has finished. */
+    onScrub?: (t: number, end: boolean) => void;
     onMarker?: (m: Marker) => void;
 }
+
+/** How much of the visible range one wheel notch moves it. */
+const WHEEL_NOTCH_FRACTION = 0.1;
 
 /** Picks a tick step that gives roughly 6-10 labels across the range. */
 function tickStep(zoomMs: number): number {
@@ -39,13 +44,14 @@ function label(t: number, step: number): string {
 
 /**
  * Recorded runs as bars on a ruler of ticks, event and bookmark markers, a playhead carrying
- * its time, a red edge for "now" in live mode, click-to-seek and drag-to-pan. Hovering a marker
- * shows its label, time and thumbnail above the bar.
+ * its time, a red edge for "now" in live mode, click-to-seek, drag-to-pan on the ruler and
+ * drag-to-scrub on a recorded span, wheel-to-pan at any time. Hovering a marker shows its label, time and thumbnail above
+ * the bar.
  */
 export function TimelineBar(props: TimelineBarProps) {
     const { spans, markers = [], playhead, zoomMs, viewEnd } = props;
     const ref = React.useRef<HTMLDivElement>(null);
-    const drag = React.useRef<{ x: number; viewEnd: number; moved: boolean } | null>(null);
+    const drag = React.useRef<{ x: number; viewEnd: number; moved: boolean; scrub: boolean; scrubAt: number; pointerX: number } | null>(null);
     const [hover, setHover] = React.useState<Marker | null>(null);
     const viewStart = viewEnd - zoomMs;
     const pct = (t: number) => ((t - viewStart) / zoomMs) * 100;
@@ -62,6 +68,44 @@ export function TimelineBar(props: TimelineBarProps) {
     const clampPct = (p: number, margin: number) => Math.max(margin, Math.min(100 - margin, p));
     const showPlayhead = playhead !== null && playhead >= viewStart && playhead <= viewEnd;
     const liveEdge = playhead === null && viewEnd >= Date.now() - 1000;
+    const newest = () => Date.now() - 2000;
+    const finish = () => {
+        const d = drag.current;
+        drag.current = null;
+        if (d?.moved && d.scrub) {
+            props.onScrub?.(d.scrubAt, true);
+        }
+        return d;
+    };
+
+    // The wheel moves the range, also during a drag. Native and not passive, so the page does not
+    // scroll along with it; the listener reads the current values from a ref.
+    const wheel = React.useRef({ viewEnd, zoomMs, onPan: props.onPan, onScrub: props.onScrub });
+    wheel.current = { viewEnd, zoomMs, onPan: props.onPan, onScrub: props.onScrub };
+    React.useEffect(() => {
+        const track = ref.current!;
+        const onWheel = (e: WheelEvent) => {
+            e.preventDefault();
+            const w = wheel.current;
+            const px = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
+            const notches = (px * (e.deltaMode === WheelEvent.DOM_DELTA_LINE ? 33 : 1)) / 100;
+            const next = Math.min(Date.now(), w.viewEnd + notches * WHEEL_NOTCH_FRACTION * w.zoomMs);
+            const d = drag.current;
+            if (d) {
+                d.viewEnd += next - w.viewEnd;
+                if (d.moved && d.scrub) {
+                    const r = track.getBoundingClientRect();
+                    const at = Math.max(0, Math.min(1, (d.pointerX - r.left) / r.width));
+                    d.scrubAt = Math.min(Date.now() - 2000, next - w.zoomMs + at * w.zoomMs);
+                    w.onScrub?.(d.scrubAt, false);
+                }
+            }
+            w.viewEnd = next;
+            w.onPan(next);
+        };
+        track.addEventListener("wheel", onWheel, { passive: false });
+        return () => track.removeEventListener("wheel", onWheel);
+    }, []);
 
     return (
         <div className="kcam-timeline" aria-label="Timeline">
@@ -76,30 +120,36 @@ export function TimelineBar(props: TimelineBarProps) {
                 ref={ref}
                 className="kcam-track"
                 onPointerDown={e => {
-                    drag.current = { x: e.clientX, viewEnd, moved: false };
-                    (e.target as Element).setPointerCapture?.(e.pointerId);
+                    const scrub = !!props.onScrub && (e.target as Element).classList.contains("kcam-span");
+                    drag.current = { x: e.clientX, viewEnd, moved: false, scrub, scrubAt: 0, pointerX: e.clientX };
+                    e.currentTarget.setPointerCapture?.(e.pointerId);
                 }}
                 onPointerMove={e => {
                     const d = drag.current;
                     if (!d) {
                         return;
                     }
+                    d.pointerX = e.clientX;
                     const dx = e.clientX - d.x;
                     if (Math.abs(dx) > 4) {
                         d.moved = true;
                     }
-                    if (d.moved) {
+                    if (d.moved && d.scrub) {
+                        // the bar stays put and the playhead follows the pointer
+                        d.scrubAt = Math.min(newest(), Math.max(viewStart, timeAt(e.clientX)));
+                        props.onScrub?.(d.scrubAt, false);
+                    } else if (d.moved) {
                         const w = ref.current!.getBoundingClientRect().width;
                         props.onPan(Math.min(Date.now(), d.viewEnd - (dx / w) * zoomMs));
                     }
                 }}
                 onPointerUp={e => {
-                    const d = drag.current;
-                    drag.current = null;
+                    const d = finish();
                     if (d && !d.moved) {
-                        props.onSeek(Math.min(Date.now() - 2000, timeAt(e.clientX)));
+                        props.onSeek(Math.min(newest(), timeAt(e.clientX)));
                     }
                 }}
+                onPointerCancel={finish}
             >
                 {ticks.map(t => (
                     <div key={t} className="kcam-tick" style={{ left: `${pct(t)}%` }}>{label(t, step)}</div>

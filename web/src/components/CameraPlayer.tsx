@@ -4,7 +4,7 @@ import {
     snapshotUrl, toMs, TransportPref,
 } from "../requests";
 import { LivePlayer, LiveState } from "../player/LivePlayer";
-import { PlaybackPlayer } from "../player/PlaybackPlayer";
+import { PlaybackPlayer, useLiveHold } from "../player/PlaybackPlayer";
 import { Marker, TimelineBar } from "../player/TimelineBar";
 import { StatusBadge } from "./StatusBadge";
 import { useTimelines } from "./useTimeline";
@@ -60,6 +60,8 @@ export function rangeMs(label: string | undefined): number {
     return ZOOMS.find(z => z.label === label)?.ms ?? ZOOMS[0].ms;
 }
 const REWIND_MS = 30000;
+/** Letting go of a scrub this close to now returns to live. */
+const LIVE_RELEASE_MS = 5000;
 
 /**
  * The camera viewer: live stream or recordings with a timeline, controls and a status badge.
@@ -81,6 +83,8 @@ export function CameraPlayer(p: CameraPlayerProps) {
     const [playing, setPlaying] = React.useState(true);
     const [rate, setRate] = React.useState(1);
     const [shown, setShown] = React.useState<number | null>(null);
+    const [scrub, setScrub] = React.useState<number | null>(null);
+    const resumeAfterScrub = React.useRef(true);
     const [zoomMs, setZoomMsState] = React.useState(rangeMs(p.timelineRange));
     React.useEffect(() => {
         if (p.timelineRange !== undefined) {
@@ -137,7 +141,7 @@ export function CameraPlayer(p: CameraPlayerProps) {
     // lands within a couple of seconds of where playback is. Only a real jump counts as a seek.
     const propTime = toMs(p.playbackTime);
     const position = shown ?? seek.to;
-    if (p.mode === "playback" && propTime !== null && propTime !== seek.to && !recentWrites.current.includes(propTime)
+    if (p.mode === "playback" && scrub === null && propTime !== null && propTime !== seek.to && !recentWrites.current.includes(propTime)
         && Math.abs(propTime - position) > 2000) {
         setSeek({ to: propTime, nonce: seek.nonce + 1 });
         // bring the target into the fetched timeline range, or the player waits forever
@@ -165,6 +169,29 @@ export function CameraPlayer(p: CameraPlayerProps) {
         p.onEvent?.("onModeChange", { mode: "live", time: Date.now() });
     };
 
+    const onScrub = (t: number, end: boolean) => {
+        if (end) {
+            setScrub(null);
+            if (t >= Date.now() - LIVE_RELEASE_MS) {
+                goLive();
+            } else {
+                goPlayback(t);
+                setPlaying(resumeAfterScrub.current);
+            }
+            return;
+        }
+        if (scrub === null) {
+            resumeAfterScrub.current = p.mode !== "playback" || playing;
+            setFollow(false);
+            noteWrite(Math.round(t));
+            write("playbackTime", lastWritten.current);
+            write("mode", "playback");
+            p.onEvent?.("onModeChange", { mode: "playback", time: t });
+        }
+        setScrub(t);
+        setShown(t);
+    };
+
     const [refresh, setRefresh] = React.useState(0);
     const tl = useTimelines(p.showTimeline || p.mode === "playback" ? requester : undefined, camera ? [camera] : [], viewEnd, zoomMs,
         refresh + (p.refreshNonce ?? 0) * 1000, true);
@@ -190,12 +217,13 @@ export function CameraPlayer(p: CameraPlayerProps) {
         } : null),
         [camera, requester, effective, transport]
     );
-    const windowUrl = React.useCallback(async (start: number, dur: number) => {
-        const w = await playbackWindow(requester!, camera, start, dur, quality, heightPx.current);
+    const windowUrl = React.useCallback(async (start: number, dur: number, scrubbing?: boolean) => {
+        const w = await playbackWindow(requester!, camera, start, dur, scrubbing ? "scrub" : quality, heightPx.current);
         setTranscoded(w.transcoded ?? null);
         return w;
     }, [requester, camera, quality]);
     const live = p.mode !== "playback";
+    const [holdLive, releaseLive] = useLiveHold(live, scrub !== null);
     const bookmark = async () => {
         if (!requester || !camera) {
             return;
@@ -290,13 +318,14 @@ export function CameraPlayer(p: CameraPlayerProps) {
         <div ref={root} className={`${ROOT_CLASS}${p.className ? ` ${p.className}` : ""}`}
             style={{ display: "flex", flexDirection: "column", background: "#000", overflow: "hidden", ...p.style }}>
             <div style={{ position: "relative", flex: "1 1 auto", minHeight: 0 }}>
-                {live ? (
+                {(live || holdLive) && (
                     <LivePlayer resolveUrl={resolveUrl} streamKey={`${camera}|${effective}|${transport}`} muted={p.muted} objectFit={p.objectFit}
                         onState={(s, detail) => setLiveState({ s, detail })} />
-                ) : (
+                )}
+                {!live && (
                     <PlaybackPlayer windowUrl={windowUrl} spans={spans} spansFrom={tl.from} spansTo={tl.to}
-                        seekTo={seek.to} seekNonce={seek.nonce}
-                        playing={playing} rate={rate} objectFit={p.objectFit} onTime={onTime}
+                        seekTo={seek.to} seekNonce={seek.nonce} scrubTo={scrub}
+                        playing={playing} rate={rate} objectFit={p.objectFit} onTime={onTime} onFirstFrame={releaseLive}
                         onState={(s, detail) => {
                             setPbState({ s, detail });
                             if (s === "liveEdge") {
@@ -353,10 +382,11 @@ export function CameraPlayer(p: CameraPlayerProps) {
                         p.onEvent?.("onMarkerClick", { kind: m.kind, time: m.t, label: m.label });
                         goPlayback(m.t);
                     }}
-                    playhead={live ? null : shown}
+                    playhead={scrub ?? (live ? null : shown)}
                     zoomMs={zoomMs}
                     viewEnd={viewEnd}
                     onSeek={goPlayback}
+                    onScrub={onScrub}
                     onPan={v => {
                         setFollow(v >= Date.now() - 1000);
                         setViewEnd(v);

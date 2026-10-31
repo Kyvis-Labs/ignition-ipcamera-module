@@ -159,6 +159,8 @@ public final class CameraOps {
      * The URL is a self-contained MP4 of that window; the client seeks by asking for a new
      * window. A recording the browser cannot decode, or a {@code quality} naming a profile, is
      * served by the gateway's transcoder in windows of at most {@link TranscodeRoute#MAX_WINDOW_SEC}.
+     * {@code quality: "scrub"} asks for the light copy recorded from the substream, for a timeline
+     * drag, and falls back to the main recording where there is none.
      */
     public JsonObject playback(JsonObject req, String user, Predicate<CameraConfig> allowed) {
         long startMs = req.get("start").getAsLong();
@@ -182,12 +184,19 @@ public final class CameraOps {
                 // MediaMTX's segments around the request: to step a start that falls in the seam
                 // between two segments onto the next one (see Timeline.snapStart), and to know
                 // whether MediaMTX still has this time at all.
+                if ("scrub".equals(quality)) {
+                    JsonObject light = scrubWindow(camera, cfg.get(), startMs, duration, token);
+                    if (light != null) {
+                        out.add(camera, light);
+                        continue;
+                    }
+                }
                 List<MediaMtxClient.Span> near = segmentsNear(path, startMs);
                 long start = Timeline.snapStart(near, startMs, SEAM_MS);
                 boolean recorded = near.stream().anyMatch(sp -> Timeline.ceilMillis(sp.start()) <= start
                     && start < sp.end().toEpochMilli());
                 CameraEvent clip = recorded ? null : clipCovering(camera, start);
-                TranscodeProfile tx = clip == null ? services.transcoder().forPlayback(camera, quality, accept, maxHeight) : null;
+                TranscodeProfile tx = clip == null ? services.transcoder().forPlayback(camera, "scrub".equals(quality) ? "main" : quality, accept, maxHeight) : null;
                 if (clip != null) {
                     // MediaMTX no longer has this (buffer expired); serve the exported clip, which
                     // starts at the clip part's start rather than the requested time
@@ -220,6 +229,36 @@ public final class CameraOps {
         JsonObject res = new JsonObject();
         res.add("streams", out);
         return res;
+    }
+
+    /** A window of the recorded substream at {@code startMs}, or null when it has none there. */
+    private JsonObject scrubWindow(String camera, CameraConfig cfg, long startMs, double duration, String token) {
+        if (!cfg.hasSubstream()) {
+            return null;
+        }
+        // /list clips spans to the range asked for, so this asks for the whole window
+        List<MediaMtxClient.Span> near;
+        try {
+            near = services.manager().client().listRecordings(PathConfigs.subPath(camera), Instant.ofEpochMilli(startMs - 1000),
+                Instant.ofEpochMilli(startMs + SEAM_MS + (long) (duration * 1000) + 1000));
+        } catch (Exception e) {
+            log.debugf("recording lookup failed for %s: %s", camera, e.getMessage());
+            return null;
+        }
+        long start = Timeline.snapStart(near, startMs, SEAM_MS);
+        for (MediaMtxClient.Span sp : near) {
+            if (Timeline.ceilMillis(sp.start()) <= start && start < sp.end().toEpochMilli()) {
+                double d = Math.min(Math.min(duration, TranscodeService.MAX_COPY_WINDOW_SEC),
+                    (sp.end().toEpochMilli() - start) / 1000.0);
+                JsonObject s = new JsonObject();
+                s.addProperty("url", "/data/camera/window?camera=" + camera + "&start=" + start + "&duration=" + d
+                    + "&stream=sub&token=" + token);
+                s.addProperty("start", start);
+                s.addProperty("duration", d);
+                return s;
+            }
+        }
+        return null;
     }
 
     /**

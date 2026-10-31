@@ -49,7 +49,7 @@ class EventServiceOpsTest {
         });
         // EVENT camera with pre-roll: events want a clip
         svc.sync(Map.of("cam", new CameraConfig(CameraType.ONVIF, "rtsp://h/x", "", "", null, "", "tcp", "",
-            RecordMode.EVENT, 7, 10, 10, 60, 30, List.of(), List.of(), List.of(), List.of(), List.of(), true)));
+            RecordMode.EVENT, 7, 10, 10, 60, 30, List.of(), List.of(), List.of(), List.of(), List.of(), true, true)));
         now = System.currentTimeMillis();
     }
 

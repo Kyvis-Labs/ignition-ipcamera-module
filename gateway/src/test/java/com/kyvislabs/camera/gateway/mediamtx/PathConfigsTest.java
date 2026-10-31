@@ -20,7 +20,7 @@ class PathConfigsTest {
 
     private static CameraConfig cam(RecordMode mode, int preRoll, String sub) {
         return new CameraConfig(CameraType.RTSP, "rtsp://192.0.2.5:554/main", sub, "admin", null, "", "tcp", "",
-            mode, 7, preRoll, 5, 60, 30, List.of(), List.of(), List.of(), List.of(), List.of(), true);
+            mode, 7, preRoll, 5, 60, 30, List.of(), List.of(), List.of(), List.of(), List.of(), true, true);
     }
 
     @Test
@@ -35,9 +35,20 @@ class PathConfigsTest {
     }
 
     @Test
-    void substreamNeverRecords() {
-        Map<String, JsonObject> d = PathConfigs.desired("front", cam(RecordMode.CONTINUOUS, 10, "rtsp://192.0.2.5/sub"), null, SERVER, false, null);
+    void substreamRecordingCanBeTurnedOff() {
+        CameraConfig c = new CameraConfig(CameraType.RTSP, "rtsp://192.0.2.5:554/main", "rtsp://192.0.2.5/sub", "", null, "", "tcp", "", RecordMode.CONTINUOUS,
+            7, 10, 5, 60, 30, List.of(), List.of(), List.of(), List.of(), List.of(), true, false);
+        Map<String, JsonObject> d = PathConfigs.desired("front", c, null, SERVER, false, null);
+        assertTrue(d.get("cam/front").get("record").getAsBoolean());
         assertFalse(d.get("cam/front/sub").get("record").getAsBoolean());
+        assertEquals("168h", d.get("cam/front/sub").get("recordDeleteAfter").getAsString());
+    }
+
+    @Test
+    void substreamRecordsAlongsideMain() {
+        Map<String, JsonObject> d = PathConfigs.desired("front", cam(RecordMode.CONTINUOUS, 10, "rtsp://192.0.2.5/sub"), null, SERVER, false, null);
+        assertTrue(d.get("cam/front/sub").get("record").getAsBoolean());
+        assertEquals("168h", d.get("cam/front/sub").get("recordDeleteAfter").getAsString());
         assertEquals("rtsp://admin@192.0.2.5/sub", d.get("cam/front/sub").get("source").getAsString());
     }
 
@@ -51,7 +62,7 @@ class PathConfigsTest {
     @Test
     void shortBuffersGetShortSegments() {
         CameraConfig c = new CameraConfig(CameraType.RTSP, "rtsp://h/x", "", "", null, "", "tcp", "", RecordMode.TAG,
-            7, 10, 5, 5, 30, List.of(), List.of(), List.of(), List.of(), List.of(), true);
+            7, 10, 5, 5, 30, List.of(), List.of(), List.of(), List.of(), List.of(), true, true);
         JsonObject main = PathConfigs.desired("x", c, null, SERVER, false, null).get("cam/x");
         assertEquals("5m", main.get("recordDeleteAfter").getAsString());
         assertEquals("2m", main.get("recordSegmentDuration").getAsString());

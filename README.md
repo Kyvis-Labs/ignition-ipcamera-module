@@ -80,6 +80,8 @@ An event starts `preRollSec` before the first trigger and ends `postRollSec` aft
 
 > **Note:** Retention is per camera. Switching a camera from `CONTINUOUS` to `EVENT` or `TAG` applies the shorter buffer retention to its existing recordings.
 
+A camera with a substream also records it by default, with the same retention, as a light copy that dragging the timeline plays from. It adds only a few GB per camera per day. Turn off `recordSubstream` to save that space; a drag then decodes the full resolution recording and is much rougher.
+
 **TAG conditions:** `true`, `false`, `> n`, `>= n`, `< n`, `<= n`, `= v`, `!= v`. Blank means truthy.
 
 **EVENT types:** Text matched against the camera's ONVIF topics and data, such as `motion`, `person` or `vehicle`. Blank means motion. `Detect from Camera` lists what the camera offers.

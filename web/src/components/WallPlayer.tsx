@@ -2,7 +2,7 @@ import * as React from "react";
 import { LiveBatcher } from "../batch";
 import { CameraRequester, playbackWindow, toMs, TransportPref } from "../requests";
 import { LivePlayer, LiveState } from "../player/LivePlayer";
-import { PlaybackPlayer, Spans } from "../player/PlaybackPlayer";
+import { PlaybackPlayer, Spans, useLiveHold } from "../player/PlaybackPlayer";
 import { Marker, TimelineBar } from "../player/TimelineBar";
 import { Controls, RestoreTab, ZOOMS } from "./Controls";
 import { StatusBadge } from "./StatusBadge";
@@ -41,6 +41,8 @@ export interface WallPlayerProps {
 }
 
 const REWIND_MS = 30000;
+/** Letting go of a scrub this close to now returns to live. */
+const LIVE_RELEASE_MS = 5000;
 
 /** Union of several cameras' spans, merged. */
 function unionSpans(lists: Spans[]): Spans {
@@ -108,6 +110,7 @@ interface TileProps {
     spansFrom?: number;
     spansTo?: number;
     seek: { to: number; nonce: number };
+    scrubTo: number | null;
     playing: boolean;
     rate: number;
     master: number;
@@ -131,12 +134,13 @@ function Tile(props: TileProps) {
         } : null),
         [batcher, tile.camera, quality, transport]
     );
-    const windowUrl = React.useCallback(async (start: number, dur: number) => {
-        const w = await playbackWindow(requester!, tile.camera, start, dur);
+    const windowUrl = React.useCallback(async (start: number, dur: number, scrubbing?: boolean) => {
+        const w = await playbackWindow(requester!, tile.camera, start, dur, scrubbing ? "scrub" : "main");
         setTranscoded(w.transcoded ?? null);
         return w;
     }, [requester, tile.camera]);
     const paused = !visible || !props.pageVisible || !props.allowedLive;
+    const [holdLive, releaseLive] = useLiveHold(live, props.scrubTo !== null);
     const detail = !props.allowedLive ? "paused: stream limit" : !visible ? "off screen" : state.detail;
 
     return (
@@ -145,14 +149,15 @@ function Tile(props: TileProps) {
             onDoubleClick={props.onToggleMax}
             style={{ position: "relative", background: "#000", overflow: "hidden", minWidth: 0, minHeight: 0, cursor: "zoom-in" }}
         >
-            {live ? (
+            {(live || holdLive) && (
                 <LivePlayer resolveUrl={resolveUrl} streamKey={`${tile.camera}|${quality}|${transport}`} paused={paused}
                     objectFit={props.objectFit} onState={(s, d) => setState({ s, detail: d })} />
-            ) : (
+            )}
+            {!live && (
                 <PlaybackPlayer windowUrl={windowUrl} spans={props.spans} spansFrom={props.spansFrom} spansTo={props.spansTo}
-                    seekTo={props.seek.to} seekNonce={props.seek.nonce}
+                    seekTo={props.seek.to} seekNonce={props.seek.nonce} scrubTo={props.scrubTo}
                     playing={props.playing} rate={props.rate} objectFit={props.objectFit} syncTime={props.master}
-                    onTime={props.onTime}
+                    onTime={props.onTime} onFirstFrame={releaseLive}
                     onState={s => setState({ s: s === "playing" ? "live" : s === "error" ? "error" : "connecting", detail: s === "gap" || s === "end" ? "no recording here" : undefined })} />
             )}
             {props.showStatus && (
@@ -223,6 +228,8 @@ export function WallPlayer(p: WallPlayerProps) {
     const [playing, setPlaying] = React.useState(true);
     const [rate, setRate] = React.useState(1);
     const [master, setMaster] = React.useState(Date.now() - REWIND_MS);
+    const [scrub, setScrub] = React.useState<number | null>(null);
+    const resumeAfterScrub = React.useRef(true);
     const clock = React.useRef({ base: Date.now() - REWIND_MS, at: performance.now(), rate: 1, playing: true });
     const clockNow = () => {
         const c = clock.current;
@@ -264,8 +271,8 @@ export function WallPlayer(p: WallPlayerProps) {
             if (clock.current.playing && t > Date.now() - 3000) {
                 write("mode", "live");
             }
-            // keep the playhead inside the fetched timeline range
-            setViewEnd(v => (t > v - zoomRef.current * 0.05 || t < v - zoomRef.current ? Math.min(Date.now(), t + zoomRef.current * 0.5) : v));
+            // keep the playhead inside the fetched timeline range, except while it is being dragged
+            setViewEnd(v => !clock.current.playing ? v : (t > v - zoomRef.current * 0.05 || t < v - zoomRef.current ? Math.min(Date.now(), t + zoomRef.current * 0.5) : v));
         }, 250);
         return () => clearInterval(id);
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -274,7 +281,7 @@ export function WallPlayer(p: WallPlayerProps) {
     // Echoes of our own writes are recognised by value; one rounded by a binding lands near the
     // clock. Only a real jump counts as a seek.
     const propTime = toMs(p.playbackTime);
-    if (!live && propTime !== null && propTime !== seek.to && !recentWrites.current.includes(propTime)
+    if (!live && scrub === null && propTime !== null && propTime !== seek.to && !recentWrites.current.includes(propTime)
         && Math.abs(propTime - master) > 2000) {
         setSeek({ to: propTime, nonce: seek.nonce + 1 });
         setFollow(false);
@@ -291,6 +298,36 @@ export function WallPlayer(p: WallPlayerProps) {
         write("mode", "playback");
         setSeek(s => ({ to: t, nonce: s.nonce + 1 }));
         setPlaying(true);
+    };
+
+    const goLive = () => {
+        write("mode", "live");
+        setFollow(true);
+        setViewEnd(Date.now());
+    };
+    const onScrub = (t: number, end: boolean) => {
+        if (end) {
+            setScrub(null);
+            clock.current.playing = resumeAfterScrub.current;
+            if (t >= Date.now() - LIVE_RELEASE_MS) {
+                goLive();
+            } else {
+                goPlayback(t);
+                setPlaying(resumeAfterScrub.current);
+            }
+            return;
+        }
+        if (scrub === null) {
+            resumeAfterScrub.current = live || playing;
+            setFollow(false);
+            noteWrite(Math.round(t));
+            write("playbackTime", lastWritten.current);
+            write("mode", "playback");
+        }
+        // the clock stands at the scrub position until the drag ends
+        clock.current = { base: t, at: performance.now(), rate, playing: false };
+        setScrub(t);
+        setMaster(t);
     };
 
     // ---- timeline (union of shown cameras) ----
@@ -340,7 +377,7 @@ export function WallPlayer(p: WallPlayerProps) {
                         <Tile key={tile.camera} tile={tile} live={live} maximised={maxed === tile.camera}
                             allowedLive={allowed} pageVisible={pageVisible} batcher={batcher} requester={requester}
                             objectFit={p.objectFit} transport={p.transport} showStatus={p.showStatus}
-                            spans={timelines[tile.camera]?.spans ?? []} spansFrom={tl.from} spansTo={tl.to} seek={seek} playing={playing} rate={rate} master={master}
+                            spans={timelines[tile.camera]?.spans ?? []} spansFrom={tl.from} spansTo={tl.to} seek={seek} scrubTo={scrub} playing={playing} rate={rate} master={master}
                             onToggleMax={() => setMaxed(m => (m === tile.camera ? null : tile.camera))} />
                     );
                 })}
@@ -349,11 +386,7 @@ export function WallPlayer(p: WallPlayerProps) {
             {p.showControls && !controlsHidden && (
                 <Controls live={live} playing={playing} rate={rate} zoomMs={zoomMs}
                     onCollapse={() => setControlsHidden(true)}
-                    onLive={() => {
-                        write("mode", "live");
-                        setFollow(true);
-                        setViewEnd(Date.now());
-                    }}
+                    onLive={goLive}
                     onRewind={() => goPlayback((live ? Date.now() : master) - REWIND_MS)}
                     onPlayPause={() => setPlaying(x => !x)}
                     onRate={setRate}
@@ -370,7 +403,7 @@ export function WallPlayer(p: WallPlayerProps) {
             )}
             {p.showTimeline && !(controlsHidden && p.showControls) && (
                 <TimelineBar spans={union} markers={markers} playhead={live ? null : master} zoomMs={zoomMs} viewEnd={viewEnd}
-                    onSeek={goPlayback} onMarker={m => goPlayback(m.t)}
+                    onSeek={goPlayback} onScrub={onScrub} onMarker={m => goPlayback(m.t)}
                     onPan={v => {
                         setFollow(v >= Date.now() - 1000);
                         setViewEnd(v);

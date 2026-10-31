@@ -289,9 +289,9 @@ public class TranscodeService {
      * cannot seek within it. A window reaching the live edge is re-fetched every 10 s rather than
      * cached, as it grows.
      */
-    public Path window(String camera, long startMs, double durationSec) throws Exception {
+    public Path window(String camera, long startMs, double durationSec, boolean sub) throws Exception {
         boolean growing = startMs + (long) (durationSec * 1000) > System.currentTimeMillis() - 5000;
-        Path out = cacheDir.resolve(key(camera + "|" + startMs + "|" + durationSec + "|copy"
+        Path out = cacheDir.resolve(key(camera + "|" + startMs + "|" + durationSec + (sub ? "|sub" : "") + "|copy"
             + (growing ? "|" + System.currentTimeMillis() / 10_000 : "")) + ".mp4");
         if (Files.exists(out)) {
             return out;
@@ -305,7 +305,7 @@ public class TranscodeService {
         try {
             Files.createDirectories(cacheDir);
             long t0 = System.nanoTime();
-            manager.client().download(PathConfigs.mainPath(camera), Instant.ofEpochMilli(startMs), durationSec, out);
+            manager.client().download(sub ? PathConfigs.subPath(camera) : PathConfigs.mainPath(camera), Instant.ofEpochMilli(startMs), durationSec, out);
             log.debugf("copied %s %s %.0fs in %d ms", camera, Instant.ofEpochMilli(startMs), durationSec,
                 (System.nanoTime() - t0) / 1_000_000);
             mine.complete(out);

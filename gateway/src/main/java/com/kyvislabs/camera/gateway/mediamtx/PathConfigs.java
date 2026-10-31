@@ -124,7 +124,14 @@ public final class PathConfigs {
 
         if (c.hasSubstream()) {
             JsonObject sub = source(c, c.subUrl(), password);
-            sub.addProperty("record", false);
+            // recorded alongside the main stream, as the light copy a timeline drag plays from; the
+            // retention stays set when that is off, so what was already recorded still ages out
+            sub.addProperty("record", record && c.recordSubstream());
+            if (deleteAfter != null) {
+                sub.addProperty("recordDeleteAfter", deleteAfter);
+            }
+            sub.addProperty("recordSegmentDuration", segment + "m");
+            sub.addProperty("recordPath", server.recordingsPath() + "/%path/%Y-%m-%d_%H-%M-%S-%f");
             out.put(subPath(camera), sub);
         }
         if (server.transcodeEnabled() && transcoder != null) {
