@@ -21,7 +21,7 @@ if [ -f "$keys/module-signing.pfx" ]; then
     "-Pignition.signing.certAlias=kyvis-module-signing"
   )
   # through the environment, so the password is not left on a command line; these names have dots,
-  # which only env can set
+  # which only env can set, and gradlew must run under bash because dash (sh on Ubuntu) drops them
   pw="$(cat "$keys/module-signing.password")"
   run=(env "ORG_GRADLE_PROJECT_ignition.signing.keystorePassword=$pw" "ORG_GRADLE_PROJECT_ignition.signing.certPassword=$pw")
 fi
@@ -29,7 +29,7 @@ fi
 for platform in "" linux-x64 linux-arm64 windows-x64 macos-arm64; do
   name="Camera${platform:+-$platform}"
   echo "== $name"
-  "${run[@]}" ./gradlew build --console=plain -q ${platform:+-Pplatform=$platform} "${signing[@]}"
+  "${run[@]}" bash ./gradlew build --console=plain -q ${platform:+-Pplatform=$platform} "${signing[@]}"
   cp "build/$name$suffix.modl" "$dist/"
 done
 ls -lh "$dist"
