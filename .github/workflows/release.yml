@@ -1,0 +1,76 @@
+# Pushing a tag like v0.2.0 builds all five modules, signs them and publishes a GitHub release.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - name: Check tag
+        run: |
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::tag must look like v1.2.3"; exit 1; }
+          echo "ORG_GRADLE_PROJECT_releaseVersion=${TAG#v}" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+
+      # Before the key exists on this runner, so dependency install scripts never see it.
+      - name: Install dependencies and test
+        run: ./gradlew build --console=plain
+
+      - name: Prepare signing key
+        env:
+          PFX_BASE64: ${{ secrets.CAMERA_SIGNING_PFX_BASE64 }}
+          KEY_PASSWORD: ${{ secrets.CAMERA_SIGNING_PASSWORD }}
+        run: |
+          [ -n "$PFX_BASE64" ] && [ -n "$KEY_PASSWORD" ] || { echo "::error::signing secrets are not set"; exit 1; }
+          keys="$RUNNER_TEMP/keys"
+          mkdir -m 700 "$keys"
+          printenv PFX_BASE64 | base64 -d > "$keys/module-signing.pfx"
+          printenv KEY_PASSWORD | tr -d '\n' > "$keys/module-signing.password"
+          keytool -exportcert -rfc -alias kyvis-module-signing -keystore "$keys/module-signing.pfx" \
+            -storepass:env KEY_PASSWORD -file "$keys/module-signing.crt"
+          echo "SIGNING_DIR=$keys" >> "$GITHUB_ENV"
+
+      - name: Build signed modules
+        run: scripts/build-all.sh
+
+      - name: Remove signing key
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/keys"
+
+      - name: Check signatures are present
+        run: |
+          cd build/dist
+          [ "$(ls *.modl | wc -l)" = 5 ] || { echo "::error::expected 5 modules"; exit 1; }
+          for f in *.modl; do
+            case "$f" in *.unsigned.modl) echo "::error::$f is unsigned"; exit 1 ;; esac
+            unzip -l "$f" | grep -q signatures.properties || { echo "::error::$f has no signatures"; exit 1; }
+          done
+          sha256sum *.modl > SHA256SUMS
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$TAG" build/dist/*.modl build/dist/SHA256SUMS --verify-tag --generate-notes

@@ -9,7 +9,8 @@ plugins {
 // Bump to tell redeploys apart: the stamp below is per HOUR, so two builds in
 // one hour share a version. Never add minutes -- Ignition parses every version
 // segment as an int and yyyyMMddHHmm overflows ("Exception parsing module.xml").
-val moduleBaseVersion = "0.1.0"
+// A release sets it from the tag (see .github/workflows/release.yml).
+val moduleBaseVersion = (findProperty("releaseVersion") as String?) ?: "0.1.0"
 val buildStamp: String = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMddHH"))
 
 allprojects {
@@ -54,7 +55,8 @@ ignitionModule {
         )
     )
     freeModule.set(true)
-    skipModlSigning.set(true)
+    // Signed only when given a key; see scripts/build-all.sh.
+    skipModlSigning.set(!hasProperty("ignition.signing.keystoreFile"))
 }
 
 // The version stamp changes every hour, and moduleContent is not cleared between
