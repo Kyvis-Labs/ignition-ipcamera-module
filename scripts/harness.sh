@@ -5,7 +5,7 @@
 set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
 out="${HARNESS_DIR:-$here/web/build/harness}"
-gw="${GATEWAY:-https://gateway.example.com}"
+gw="${GATEWAY:?set GATEWAY to the gateway URL}"
 api_token="$(cat "${API_TOKEN_FILE:?set API_TOKEN_FILE to a file holding the gateway API token}")"
 cams=("${@:-sim1 sim2 sim3 sim4}")
 read -r -a cams <<<"${cams[*]}"
