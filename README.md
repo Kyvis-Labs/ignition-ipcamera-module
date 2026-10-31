@@ -8,7 +8,7 @@ The Camera Module provides support for:
 2. ONVIF discovery, stream URL lookup, events and PTZ
 3. Off, continuous, camera event and tag driven recording, with pre-roll and post-roll
 4. Timeline playback, bookmarks, event clips, snapshots and MP4 export
-5. Low-latency HLS over the gateway's own port, or WebRTC for lower latency
+5. WebRTC for low latency, or low-latency HLS over the gateway's own port
 6. Transcoding to H.264 for browsers that cannot decode a camera's codec, or to save bandwidth
 7. Status and ONVIF event tags in a tag provider called `Cameras`
 8. Scripting through `system.camera`
@@ -210,12 +210,12 @@ system.camera.getOnvifProfiles("http://192.0.2.20/onvif/device_service", "admin"
 
 The default is set in `Settings > Live Transport`, and a component can override it.
 
-| | Low-latency HLS (default) | WebRTC |
+| | WebRTC (default) | Low-latency HLS |
 |---|---|---|
-| Delay | About 1-2 seconds | Under 1 second |
-| Ports | Gateway port only | Gateway port and media port |
-| Video goes through the gateway | Yes | No |
-| AAC audio | Yes | No |
+| Delay | Under 1 second | About 1-2 seconds |
+| Ports | Gateway port and media port | Gateway port only |
+| Video goes through the gateway | No | Yes |
+| AAC audio | No | Yes |
 
 WebRTC falls back to HLS if it cannot connect. For lower HLS delay, set the camera's keyframe interval to 1-2 seconds.
 

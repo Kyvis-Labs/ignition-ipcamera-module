@@ -20,7 +20,7 @@ const port = (fallback: number) => yup.number().typeError("Must be a number").in
 
 const CONFIG_SCHEMA = yup.object({
     serverMode: yup.string().oneOf(["AUTO", "EMBEDDED", "EXTERNAL"]).default("AUTO"),
-    liveTransport: yup.string().oneOf(["HLS", "WEBRTC"]).default("HLS"),
+    liveTransport: yup.string().oneOf(["HLS", "WEBRTC"]).default("WEBRTC"),
     embeddedHlsPort: port(8888),
     hlsUrl: yup.string().trim().default("http://mediamtx:8888").matches(URL, "Must be an http:// or https:// URL"),
     embeddedIcePort: port(8189),

@@ -128,7 +128,7 @@ public record MediaServerConfig(
 
     @Description("How browsers get live video by default: HLS (low-latency HLS through the gateway's own port, "
         + "about 1-2 s behind) or WEBRTC (about 0.2-0.5 s behind; needs the media port). A component can override it.")
-    @DefaultValue("HLS")
+    @DefaultValue("WEBRTC")
     LiveTransport liveTransport,
 
     @Description("Embedded: HLS port (local to the gateway, which proxies it).")
@@ -145,7 +145,7 @@ public record MediaServerConfig(
         ServerMode.AUTO, 8554, 8889, 8189, 9996, 9997, List.of(), "",
         "http://mediamtx:9997", "http://mediamtx:9996", "http://mediamtx:8889", "", "", null, null, "", 15, 10,
         "/recordings", true, 2, TranscodeEncoder.SOFTWARE, "/dev/dri/renderD128", "veryfast", 10,
-        TranscodeProfile.DEFAULTS, "ffmpeg", LiveTransport.HLS, 8888, "http://mediamtx:8888");
+        TranscodeProfile.DEFAULTS, "ffmpeg", LiveTransport.WEBRTC, 8888, "http://mediamtx:8888");
 
     public static final List<String> PRESETS = List.of(
         "ultrafast", "superfast", "veryfast", "faster", "fast", "medium");
@@ -176,7 +176,7 @@ public record MediaServerConfig(
         transcodeIdleSec = transcodeIdleSec == null ? 10 : Math.max(1, transcodeIdleSec);
         transcodeProfiles = transcodeProfiles == null ? TranscodeProfile.DEFAULTS : List.copyOf(transcodeProfiles);
         ffmpegPath = ffmpegPath == null || ffmpegPath.isBlank() ? "ffmpeg" : ffmpegPath.trim();
-        liveTransport = liveTransport == null ? LiveTransport.HLS : liveTransport;
+        liveTransport = liveTransport == null ? LiveTransport.WEBRTC : liveTransport;
         embeddedHlsPort = port(embeddedHlsPort, 8888);
         hlsUrl = stripSlash(hlsUrl == null || hlsUrl.isBlank() ? "http://mediamtx:8888" : hlsUrl.trim());
     }
