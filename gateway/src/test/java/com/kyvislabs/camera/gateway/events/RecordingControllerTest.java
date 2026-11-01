@@ -180,4 +180,27 @@ class RecordingControllerTest {
         assertEquals(30 * 60_000L, c.maxEventMs(), "60 min buffer -> split every 30 min");
         assertEquals(RecordingController.MAX_EVENT_MS, controller(cfg(RecordMode.TAG, 0, 5), Clock.systemUTC()).maxEventMs());
     }
+
+    private static CameraConfig onvifContinuous(int pre, int post) {
+        return new CameraConfig(CameraType.ONVIF, "rtsp://h/x", "", "", null, "", "tcp", "", RecordMode.CONTINUOUS,
+            7, pre, post, 60, 30, List.of(), List.of(), List.of(), List.of(), List.of(), true, true);
+    }
+
+    @Test
+    void continuousOnvifCameraLogsEventsWithoutSwitchingRecording() throws Exception {
+        long[] now = {100_000};
+        RecordingController c = controller(onvifContinuous(10, 0), Clock.fixed(java.time.Instant.ofEpochMilli(now[0]), java.time.ZoneOffset.UTC));
+        c.trigger("event:x", true, "Motion", "event");
+        assertEquals(List.of("open 90000 false"), calls);
+        assertEquals(RecordingController.MAX_EVENT_MS, c.maxEventMs());
+        c.close();
+        assertEquals(1, closed.size());
+    }
+
+    @Test
+    void continuousRtspCameraLogsNothing() {
+        RecordingController c = controller(cfg(RecordMode.CONTINUOUS, 10, 0), Clock.systemUTC());
+        c.trigger("event:x", true, "Motion", "event");
+        assertEquals(List.of(), calls);
+    }
 }

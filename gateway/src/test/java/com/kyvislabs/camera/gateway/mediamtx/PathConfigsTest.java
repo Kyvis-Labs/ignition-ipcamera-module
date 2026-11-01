@@ -193,4 +193,23 @@ class PathConfigsTest {
         assertTrue(PathConfigs.isTranscode("cam/front/sub/tx/480p"));
         assertFalse(PathConfigs.isTranscode("cam/front/sub"));
     }
+
+    @Test
+    void rtmpLoginGoesInTheStreamNameAndIsRedacted() {
+        String u = PathConfigs.withCredentials("rtmp://192.0.2.20/bcs#channel0_main.bcs?channel=0&stream=0", "admin", "p&w");
+        assertEquals("rtmp://192.0.2.20/bcs#channel0_main.bcs?channel=0&stream=0&user=admin&password=p%26w", u);
+        assertEquals("rtmp://192.0.2.20/bcs#channel0_main.bcs?channel=0&stream=0&user=admin&password=***", PathConfigs.redact(u));
+        assertEquals("rtmp://192.0.2.20/x#s?user=me", PathConfigs.withCredentials("rtmp://192.0.2.20/x#s?user=me", "admin", "pw"));
+        assertEquals("rtmp://192.0.2.20/x#s?user=admin&password=pw", PathConfigs.withCredentials("rtmp://192.0.2.20/x#s", "admin", "pw"));
+    }
+
+    @Test
+    void rtmpStreamNameMovesToTheFragment() {
+        assertEquals("rtmp://192.0.2.20/bcs#channel0_main.bcs?channel=0&stream=0",
+            PathConfigs.rtmpStream("rtmp://192.0.2.20/bcs/channel0_main.bcs?channel=0&stream=0"));
+        assertEquals("rtmps://192.0.2.20:1936/a/b#c", PathConfigs.rtmpStream("rtmps://192.0.2.20:1936/a/b/c"));
+        assertEquals("rtmp://192.0.2.20/bcs#s?x=1", PathConfigs.rtmpStream("rtmp://192.0.2.20/bcs#s?x=1"));
+        assertEquals("rtmp://192.0.2.20/live", PathConfigs.rtmpStream("rtmp://192.0.2.20/live"));
+        assertEquals("rtsp://192.0.2.20/a/b", PathConfigs.rtmpStream("rtsp://192.0.2.20/a/b"));
+    }
 }

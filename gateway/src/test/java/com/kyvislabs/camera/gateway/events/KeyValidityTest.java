@@ -32,6 +32,10 @@ class KeyValidityTest {
         assertTrue(EventService.keyStillValid(cfg(RecordMode.EVENT, List.of()), "event:x|Motion"));
         assertFalse(EventService.keyStillValid(cfg(RecordMode.TAG, List.of()), "event:x|Motion"));
         assertTrue(EventService.keyStillValid(cfg(RecordMode.TAG, List.of()), "script:manual"));
+        CameraConfig onvif = new CameraConfig(com.kyvislabs.camera.gateway.config.CameraType.ONVIF, "rtsp://h/x", "", "", null, "", "tcp", "",
+            RecordMode.CONTINUOUS, 1, 10, 10, 60, 30, List.of(), List.of(), List.of(), List.of(), List.of(), false, true);
+        assertTrue(onvif.subscribesOnvif());
+        assertTrue(EventService.keyStillValid(onvif, "event:x|Motion"));
     }
 
     @Test

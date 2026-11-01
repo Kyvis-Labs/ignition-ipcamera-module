@@ -4,7 +4,7 @@ An Ignition module that adds IP camera live view, recording and playback to Pers
 
 The Camera Module provides support for:
 
-1. Generic RTSP cameras, ONVIF cameras and UniFi Protect RTSPS streams
+1. Generic RTSP and RTMP cameras, ONVIF cameras and UniFi Protect RTSPS streams
 2. ONVIF discovery, stream URL lookup, events and PTZ
 3. Off, continuous, camera event and tag driven recording, with pre-roll and post-roll
 4. Timeline playback, bookmarks, event clips, snapshots and MP4 export
@@ -50,7 +50,7 @@ Browser (Perspective) ── websocket ──▶ Gateway (this module)
 
 Gateway ── control API ──▶ MediaMTX: adds a path for each camera and repairs them on a timer
 MediaMTX ── auth callback ──▶ Gateway: checks the token on each request
-MediaMTX ── RTSP/RTSPS ──▶ Cameras
+MediaMTX ── RTSP/RTMP ──▶ Cameras
 ```
 
 MediaMTX pulls the camera streams and records them. The gateway owns the configuration and decides who can see what. A reverse proxy is only needed if you want browsers to reach an external MediaMTX directly.
@@ -62,6 +62,7 @@ Without a transcode, video is passed through as the camera sends it. A Camera Wa
 Camera names become part of the stream path and can only use letters, digits, `_`, `.` and `-`. A camera cannot be renamed because its recordings are stored by name.
 
 - **RTSP:** Enter the stream URLs and put the credentials in their own fields.
+- **RTMP:** Any camera type also accepts `rtmp://` and `rtmps://` stream URLs, such as `rtmp://192.0.2.20/bcs/channel0_main.bcs?channel=0&stream=0` on a Reolink. The username and password fields are sent as `user` and `password` stream parameters. Reolink cameras above 5 MP may refuse RTMP.
 - **ONVIF:** Enter the credentials and click `Fill Stream URLs from ONVIF`. `ONVIF Tags` keeps an event subscription open and exposes the camera's events as tags.
 - **UniFi Protect:** Enable RTSP on the camera in Protect. Use the `rtsps://...:7441/...` link and the certificate's SHA-256 fingerprint.
 
@@ -73,6 +74,7 @@ Each camera has `viewRoles` and `playbackRoles`. If empty, anyone who can open a
 |---|---|---|
 | `OFF` | Live only | - |
 | `CONTINUOUS` | Records everything | `retentionDays` |
+| `CONTINUOUS` on an ONVIF camera | Records continuously and also logs the camera's events, with no effect on recording | `retentionDays`, unless the event is protected |
 | `EVENT` / `TAG` with pre-roll | Records to a rolling buffer and copies each event out as a clip | `eventRetentionDays` |
 | `EVENT` / `TAG` without pre-roll | Starts recording when triggered, about 1-2 seconds late | `eventRetentionDays` |
 

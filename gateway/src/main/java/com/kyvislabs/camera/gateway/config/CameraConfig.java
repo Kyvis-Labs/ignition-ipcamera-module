@@ -19,12 +19,12 @@ import com.kyvislabs.camera.common.CameraModule;
  * description come from the resource system and are deliberately not repeated here.
  */
 public record CameraConfig(
-    @Description("RTSP for any camera; ONVIF adds discovery and events; UNIFI_PROTECT for a Protect RTSPS share.")
+    @Description("RTSP for any stream URL (rtsp or rtmp); ONVIF adds discovery and events; UNIFI_PROTECT for a Protect RTSPS share.")
     @DefaultValue("RTSP")
     CameraType type,
 
     @Required
-    @Description("Main (full resolution) stream, e.g. rtsp://192.0.2.20:554/h264Preview_01_main. "
+    @Description("Main (full resolution) stream, e.g. rtsp://192.0.2.20:554/h264Preview_01_main or rtmp://192.0.2.20/bcs/channel0_main.bcs?channel=0&stream=0. "
         + "Leave credentials out of the URL; use username/password.")
     String mainUrl,
 
@@ -39,11 +39,11 @@ public record CameraConfig(
         + "Blank = derived from the main stream's host. Used for EVENT mode and stream discovery.")
     String onvifUrl,
 
-    @Description("RTSP transport: tcp (default, most reliable), udp, or automatic.")
+    @Description("RTSP transport: tcp (default, most reliable), udp, or automatic. Ignored for rtmp streams.")
     @DefaultValue("tcp")
     String rtspTransport,
 
-    @Description("SHA-256 fingerprint of the camera's TLS certificate, for rtsps:// sources with a "
+    @Description("SHA-256 fingerprint of the camera's TLS certificate, for rtsps:// and rtmps:// sources with a "
         + "self-signed certificate (UniFi Protect).")
     String tlsFingerprint,
 
@@ -53,11 +53,11 @@ public record CameraConfig(
     @DefaultValue("CONTINUOUS")
     RecordMode recordMode,
 
-    @Description("CONTINUOUS: days to keep recordings.")
+    @Description("CONTINUOUS: days to keep recordings, and the events logged from an ONVIF camera unless protected.")
     @DefaultValue("7")
     Integer retentionDays,
 
-    @Description("EVENT/TAG: seconds of video kept from before the trigger.")
+    @Description("EVENT/TAG: seconds of video kept from before the trigger. CONTINUOUS ONVIF: how far before the trigger a logged event starts.")
     @DefaultValue("10")
     Integer preRollSec,
 
@@ -134,7 +134,12 @@ public record CameraConfig(
      * needs one to record, and ONVIF tags need one in any mode.
      */
     public boolean subscribesOnvif() {
-        return type == CameraType.ONVIF && (recordMode == RecordMode.EVENT || onvifTags);
+        return type == CameraType.ONVIF && (recordMode == RecordMode.EVENT || onvifTags || logsOnvifEvents());
+    }
+
+    /** A continuously recorded ONVIF camera logs its events without them affecting recording. */
+    public boolean logsOnvifEvents() {
+        return type == CameraType.ONVIF && recordMode == RecordMode.CONTINUOUS;
     }
 
     /** Whether a secret is set at all: "None" in the form arrives here as no SecretConfig. */
@@ -173,13 +178,13 @@ public record CameraConfig(
             v.requireNotEmpty("mainUrl", c.mainUrl());
             v.checkField(c.onvifUrl() == null || c.onvifUrl().isBlank() || c.onvifUrl().matches("(?i)https?://.+"),
                 "onvifUrl", "onvifUrl must be an http:// or https:// URL");
-            v.checkField(c.mainUrl() == null || c.mainUrl().matches("(?i)rtsps?://.+"),
-                "mainUrl", "mainUrl must be an rtsp:// or rtsps:// URL");
+            v.checkField(c.mainUrl() == null || c.mainUrl().matches("(?i)(rtsps?|rtmps?)://.+"),
+                "mainUrl", "mainUrl must be an rtsp://, rtsps://, rtmp:// or rtmps:// URL");
             // MediaMTX refuses a source URL with a user and no password; catch it here, not in the log
             v.checkField(c.username() == null || c.username().isBlank() || hasSecret(c.password()),
                 "password", "a username needs a password; leave both blank for a camera without authentication");
-            v.checkField(!c.hasSubstream() || c.subUrl().matches("(?i)rtsps?://.+"),
-                "subUrl", "subUrl must be an rtsp:// or rtsps:// URL");
+            v.checkField(!c.hasSubstream() || c.subUrl().matches("(?i)(rtsps?|rtmps?)://.+"),
+                "subUrl", "subUrl must be an rtsp://, rtsps://, rtmp:// or rtmps:// URL");
             v.checkField(c.retentionDays() >= 1, "retentionDays", "retentionDays must be at least 1");
             v.checkField(c.preRollSec() >= 0 && c.postRollSec() >= 0,
                 "preRollSec", "pre/post roll cannot be negative");

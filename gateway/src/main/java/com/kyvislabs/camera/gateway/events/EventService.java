@@ -38,6 +38,10 @@ import com.kyvislabs.camera.gateway.onvif.OnvifEventSubscriber;
  * event is copied out of it into the event store, so the buffer can expire while the event
  * clip is kept for {@code eventRetentionDays}. Without pre-roll, recording is switched on for
  * the duration of the event and the video stays in MediaMTX.
+ *
+ * <p>A continuously recorded ONVIF camera only logs its events: the video is already in the
+ * recordings and the event expires with them. Protecting one copies its clip out, so it outlives
+ * the recordings.
  */
 public class EventService {
     private static final LoggerEx log = LoggerEx.newBuilder().build("camera.EventService");
@@ -140,9 +144,14 @@ public class EventService {
                 .anyMatch(t -> key.equals(tagKey(t)));
         }
         if (key.startsWith("event:")) {
-            return cfg.recordMode() == RecordMode.EVENT;
+            return cfg.recordMode() == RecordMode.EVENT || cfg.logsOnvifEvents();
         }
         return false;
+    }
+
+    /** Whether this event's video has to be copied out of MediaMTX to be kept. */
+    static boolean wantsClip(CameraConfig cfg, CameraEvent e) {
+        return e.protect() || (e.kind() == CameraEvent.Kind.EVENT && RecordingController.handlesEvents(cfg) && cfg.preRollSec() > 0);
     }
 
     static String tagKey(TagTrigger t) {
@@ -175,9 +184,8 @@ public class EventService {
                     store.put(fixed);
                     log.infof("Camera '%s': closed event %s left open by a restart", camera, e.id());
                 }
-                boolean wantsClip = fixed.kind() == CameraEvent.Kind.EVENT ? cfg.preRollSec() > 0 : fixed.protect();
-                long bufferMs = cfg.bufferRetentionMin() * 60_000L;
-                if (wantsClip && fixed.clips().isEmpty() && now - fixed.startMs() < bufferMs) {
+                long keptMs = cfg.recordMode() == RecordMode.CONTINUOUS ? cfg.retentionDays() * 86_400_000L : cfg.bufferRetentionMin() * 60_000L;
+                if (wantsClip(cfg, fixed) && fixed.clips().isEmpty() && now - fixed.startMs() < keptMs) {
                     scheduleExport(fixed);
                 }
             }
@@ -337,11 +345,14 @@ public class EventService {
             @Override
             public void closed(CameraEvent event, boolean stopRecording) {
                 CameraConfig cfg = cameras.get(camera);
-                boolean buffered = cfg != null && cfg.preRollSec() > 0;
-                if (!buffered && stopRecording) {
+                boolean logged = cfg != null && !RecordingController.handlesEvents(cfg);
+                boolean buffered = cfg != null && !logged && cfg.preRollSec() > 0;
+                if (!logged && !buffered && stopRecording) {
                     hooks.recordNow(camera, false);
                 }
-                hooks.recordingChanged(camera, controllers.containsKey(camera) && controllers.get(camera).recording(), null);
+                if (!logged) {
+                    hooks.recordingChanged(camera, controllers.containsKey(camera) && controllers.get(camera).recording(), null);
+                }
                 persist(event);
                 log.infof("Camera '%s': event closed after %ds", camera, (event.endMs() - event.startMs()) / 1000);
                 if (buffered) {
@@ -372,7 +383,7 @@ public class EventService {
     public void cameraEvent(String camera, String key, String label, boolean on) {
         RecordingController c = controllers.get(camera);
         CameraConfig cfg = cameras.get(camera);
-        if (c != null && (!on || (cfg != null && cfg.recordMode() == RecordMode.EVENT))) {
+        if (c != null && (!on || (cfg != null && (cfg.recordMode() == RecordMode.EVENT || cfg.logsOnvifEvents())))) {
             c.trigger("event:" + key, on, label, "event");
         }
     }
@@ -468,8 +479,7 @@ public class EventService {
         CameraConfig cfg = cameras.get(camera);
         List<CameraEvent> out = new ArrayList<>();
         for (CameraEvent e : store.list(camera, startMs, endMs)) {
-            boolean wantsClip = cfg != null && (e.kind() == CameraEvent.Kind.EVENT ? cfg.preRollSec() > 0 : e.protect());
-            if (e.open() || (wantsClip && e.clips().isEmpty())) {
+            if (e.open() || (cfg != null && wantsClip(cfg, e) && e.clips().isEmpty())) {
                 out.add(e);
             }
         }
@@ -578,12 +588,10 @@ public class EventService {
     void applyRetention() {
         long now = clock.millis();
         cameras.forEach((camera, cfg) -> {
-            long eventHorizon = now - cfg.eventRetentionDays() * 86_400_000L;
             int days = cfg.recordMode() == RecordMode.CONTINUOUS ? cfg.retentionDays() : cfg.eventRetentionDays();
-            long bookmarkHorizon = now - days * 86_400_000L;
+            long horizon = now - days * 86_400_000L;
             try {
-                int n = store.removeIf(camera, e -> !e.open() && !e.protect() && (
-                    e.kind() == CameraEvent.Kind.EVENT ? e.endMs() < eventHorizon : e.endMs() < bookmarkHorizon));
+                int n = store.removeIf(camera, e -> !e.open() && !e.protect() && e.endMs() < horizon);
                 if (n > 0) {
                     log.infof("Camera '%s': retention removed %d events/bookmarks", camera, n);
                 }

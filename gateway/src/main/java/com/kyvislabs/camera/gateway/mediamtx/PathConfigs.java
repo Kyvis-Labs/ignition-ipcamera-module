@@ -172,13 +172,32 @@ public final class PathConfigs {
 
     private static JsonObject source(CameraConfig c, String url, String password) {
         JsonObject o = new JsonObject();
-        o.addProperty("source", withCredentials(url.trim(), c.username(), password));
+        o.addProperty("source", withCredentials(rtmpStream(url.trim()), c.username(), password));
         o.addProperty("sourceOnDemand", false);
         o.addProperty("rtspTransport", c.rtspTransport());
         if (c.tlsFingerprint() != null && !c.tlsFingerprint().isBlank()) {
             o.addProperty("sourceFingerprint", c.tlsFingerprint().replace(":", "").toLowerCase());
         }
         return o;
+    }
+
+    /**
+     * MediaMTX's RTMP client sends the whole URL path as the app and takes the stream name from
+     * the fragment, where cameras and ffmpeg expect the last path segment to be the stream:
+     * rtmp://host/app/stream?a=b becomes rtmp://host/app#stream?a=b.
+     */
+    static String rtmpStream(String url) {
+        if (!url.regionMatches(true, 0, "rtmp", 0, 4) || url.contains("#")) {
+            return url;
+        }
+        URI uri = URI.create(url);
+        String path = uri.getRawPath();
+        int slash = path == null ? -1 : path.lastIndexOf('/');
+        if (slash <= 0 || slash == path.length() - 1) {
+            return url;
+        }
+        int pathAt = url.indexOf(path, url.indexOf("://") + 3);
+        return url.substring(0, pathAt + slash) + "#" + url.substring(pathAt + slash + 1);
     }
 
     /** Puts user:password into the URL unless it already carries credentials. */
@@ -189,6 +208,16 @@ public final class PathConfigs {
         URI uri = URI.create(url);
         if (uri.getRawUserInfo() != null) {
             return url;
+        }
+        if (url.regionMatches(true, 0, "rtmp", 0, 4)) {
+            // Reolink and others take RTMP logins as parameters of the stream name, which
+            // MediaMTX's client reads from the URL fragment: rtmp://host/app#stream?a=b
+            String stream = uri.getRawFragment();
+            if (stream == null || stream.matches("(.*[?&])?user=.*")) {
+                return url;
+            }
+            return url + (stream.contains("?") ? "&" : "?") + "user=" + enc(user)
+                + (password == null ? "" : "&password=" + enc(password));
         }
         String info = enc(user) + (password == null ? "" : ":" + enc(password));
         int schemeEnd = url.indexOf("://") + 3;
@@ -260,7 +289,7 @@ public final class PathConfigs {
 
     /** The source URL with any password replaced, for logs and status tags. */
     public static String redact(String url) {
-        return url == null ? null : url.replaceAll("(://[^:/@]+):[^@]*@", "$1:***@");
+        return url == null ? null : url.replaceAll("(://[^:/@]+):[^@]*@", "$1:***@").replaceAll("([?&]password=)[^&\\s\"]*", "$1***");
     }
 
 }

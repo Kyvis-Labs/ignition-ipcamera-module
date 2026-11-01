@@ -61,9 +61,9 @@ public class RecordingController {
     }
 
     public synchronized void reconfigure(CameraConfig next) {
-        boolean wasEventMode = handlesEvents(config);
+        boolean wasLogging = logsEvents(config);
         this.config = next;
-        if (wasEventMode && !handlesEvents(next)) {
+        if (wasLogging && !logsEvents(next)) {
             active.clear();
             close();
         }
@@ -84,13 +84,18 @@ public class RecordingController {
         return c.recordMode() == RecordMode.EVENT || c.recordMode() == RecordMode.TAG;
     }
 
+    /** Whether events open on this camera: its recording follows them, or they are only logged. */
+    public static boolean logsEvents(CameraConfig c) {
+        return handlesEvents(c) || c.logsOnvifEvents();
+    }
+
     /**
      * Longest single event. With pre-roll the clip is copied out of MediaMTX's rolling buffer
      * only when the event closes, so an event must end well inside the buffer or its start has
      * already been deleted; events are split at half the buffer (and at most every hour).
      */
     long maxEventMs() {
-        if (config.preRollSec() > 0) {
+        if (handlesEvents(config) && config.preRollSec() > 0) {
             return Math.min(MAX_EVENT_MS, config.bufferRetentionMin() * 60_000L / 2);
         }
         return MAX_EVENT_MS;
@@ -109,7 +114,7 @@ public class RecordingController {
             }
             return;
         }
-        if (!handlesEvents(config)) {
+        if (!logsEvents(config)) {
             return;
         }
         boolean first = active.isEmpty();
@@ -124,7 +129,7 @@ public class RecordingController {
             open = new CameraEvent(UUID.randomUUID().toString(), camera, CameraEvent.Kind.EVENT,
                 now - config.preRollSec() * 1000L, 0, label == null || label.isEmpty() ? key : label,
                 source, "", false, List.of());
-            listener.opened(open, config.preRollSec() == 0);
+            listener.opened(open, handlesEvents(config) && config.preRollSec() == 0);
         }
     }
 

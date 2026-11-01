@@ -12,7 +12,8 @@ import { ProbeArgs, ProbeResult, useProbeCameraMutation } from "./camera.service
 
 /** Also the gateway's rule (CameraConfig.NAME): the name becomes the stream path cam/<name>. */
 const NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
-const RTSP = /^rtsps?:\/\/.+/i;
+const STREAM_URL = /^(rtsps?|rtmps?):\/\/.+/i;
+const STREAM_URL_ERROR = "Must be an rtsp://, rtsps://, rtmp:// or rtmps:// URL";
 const HTTP = /^https?:\/\/.+/i;
 
 /** A value typed into a table cell: '' means unset, anything else must be a whole number. */
@@ -32,8 +33,8 @@ const SCHEMA = SchemaUtils.createBackupConfigSchema(yup.object({
     enabled: yup.boolean().default(true),
     config: yup.object({
         type: yup.string().oneOf(["RTSP", "ONVIF", "UNIFI_PROTECT"]).default("RTSP"),
-        mainUrl: yup.string().trim().required("Main stream URL is required").matches(RTSP, "Must be an rtsp:// or rtsps:// URL"),
-        subUrl: yup.string().trim().default("").test("rtsp", "Must be an rtsp:// or rtsps:// URL", v => !v || RTSP.test(v)),
+        mainUrl: yup.string().trim().required("Main stream URL is required").matches(STREAM_URL, STREAM_URL_ERROR),
+        subUrl: yup.string().trim().default("").test("stream-url", STREAM_URL_ERROR, v => !v || STREAM_URL.test(v)),
         username: yup.string().default(""),
         password: OptionalPasswordFieldSchema.clone().default(null)
             .when("username", ([username], s) => (username && String(username).trim()
@@ -67,8 +68,8 @@ const SCHEMA = SchemaUtils.createBackupConfigSchema(yup.object({
 export const CAMERA_DEFAULTS = { config: (SCHEMA.getDefault() as { config: Record<string, unknown> }).config };
 
 const TYPES = [
-    { value: "RTSP", label: "RTSP" },
-    { value: "ONVIF", label: "ONVIF (RTSP plus discovery and events)" },
+    { value: "RTSP", label: "Stream URL (RTSP or RTMP)" },
+    { value: "ONVIF", label: "ONVIF (stream URL plus discovery and events)" },
     { value: "UNIFI_PROTECT", label: "UniFi Protect (RTSPS share)" },
 ];
 const TRANSPORTS = [
@@ -136,6 +137,7 @@ export function CameraForm(props: ResourceFormProps) {
     const subUrl = useWatch({ control: context.control, name: f("subUrl") }) as string | undefined;
     const mainUrl = (useWatch({ control: context.control, name: f("mainUrl") }) as string) ?? "";
     const events = recordMode === "EVENT" || recordMode === "TAG";
+    const logsOnvifEvents = recordMode === "CONTINUOUS" && camType === "ONVIF";
 
     if (!defaultFormValuesSet) {
         return null;
@@ -157,7 +159,7 @@ export function CameraForm(props: ResourceFormProps) {
                 <FormControlInput input={<TextInput placeholder="rtsp://192.0.2.20:554/stream1" />} name={f("mainUrl")} id="main-url"
                     label="Main Stream URL *" description={camType === "UNIFI_PROTECT"
                         ? "In Protect: camera → Settings → Advanced → RTSP. Copy the High quality rtsps://…:7441/… link."
-                        : "Full resolution. Put credentials in the fields below, not in the URL."} />
+                        : "Full resolution, rtsp:// or rtmp://. Put credentials in the fields below, not in the URL."} />
                 <FormControlInput input={<TextInput placeholder="rtsp://192.0.2.20:554/stream2" />} name={f("subUrl")} id="sub-url"
                     label="Substream URL" description="Low resolution. Camera walls use it for tiles; without one, every tile decodes the main stream." />
                 <FormControlInput input={<TextInput />} name={f("username")} id="username" label="Username" />
@@ -170,8 +172,8 @@ export function CameraForm(props: ResourceFormProps) {
                         description="Exposes every event topic (Active, LastSeen, Data) and the device information as tags under [Cameras]<name>/Onvif." />
                 </>}
                 {camType !== "UNIFI_PROTECT" && <OnvifFill camera={type === "edit" ? (props.defaultValues as any)?.name : undefined} />}
-                <FormControlInput input={<SelectInput values={TRANSPORTS} />} name={f("rtspTransport")} id="rtsp-transport" label="RTSP Transport" />
-                {(camType === "UNIFI_PROTECT" || mainUrl.toLowerCase().startsWith("rtsps")) && (
+                <FormControlInput input={<SelectInput values={TRANSPORTS} />} name={f("rtspTransport")} id="rtsp-transport" label="RTSP Transport" description="Only applies to rtsp:// and rtsps:// streams." />
+                {(camType === "UNIFI_PROTECT" || /^(rtsps|rtmps):/i.test(mainUrl)) && (
                     <FormControlInput input={<TextInput />} name={f("tlsFingerprint")} id="tls-fingerprint" label="TLS Fingerprint"
                         description="SHA-256 fingerprint of the camera's self-signed certificate (UniFi Protect)." />
                 )}
@@ -186,8 +188,15 @@ export function CameraForm(props: ResourceFormProps) {
                         description="A light copy with the same retention. Dragging the timeline plays it; without it, a drag decodes the full resolution recording and is much rougher." />
                 )}
                 {recordMode === "CONTINUOUS" && (
-                    <FormControlInput input={<NumericInput min={1} />} name={f("retentionDays")} id="retention-days" label="Keep Recordings (days)" />
+                    <FormControlInput input={<NumericInput min={1} />} name={f("retentionDays")} id="retention-days" label="Keep Recordings (days)"
+                        description={logsOnvifEvents ? "Logged events expire with the recordings unless protected." : undefined} />
                 )}
+                {logsOnvifEvents && <>
+                    <FormControlInput input={<NumericInput min={0} />} name={f("preRollSec")} id="pre-roll" label="Event Start Margin (s)"
+                        description="How far before the trigger a logged event starts." />
+                    <FormControlInput input={<NumericInput min={0} />} name={f("postRollSec")} id="post-roll" label="Event End Margin (s)"
+                        description="How long after the last trigger clears a logged event ends." />
+                </>}
                 {events && <>
                     <FormControlInput input={<NumericInput min={0} />} name={f("preRollSec")} id="pre-roll" label="Pre-roll (s)"
                         description="Video kept from before the trigger. 0 means no rolling buffer: recording starts 1–2 s after the trigger." />
@@ -196,11 +205,11 @@ export function CameraForm(props: ResourceFormProps) {
                     <FormControlInput input={<NumericInput min={2} />} name={f("bufferRetentionMin")} id="buffer" label="Rolling Buffer (minutes)" />
                     <FormControlInput input={<NumericInput min={1} />} name={f("eventRetentionDays")} id="event-retention" label="Keep Events (days)" />
                 </>}
-                {recordMode === "EVENT" && <>
+                {(recordMode === "EVENT" || logsOnvifEvents) && <>
                     <EventTopicPicker camera={type === "edit" ? (props.defaultValues as any)?.name : undefined} />
                     <FormControlInput input={<ValueTable columnDef={{ header: "EVENT TYPE" }} buttonText="Add Event Type" emptyText="Motion" />}
                         name={f("eventTypes")} id="event-types" label="Event Types"
-                        description="Event topics or keywords that start recording. Empty means motion." />
+                        description={logsOnvifEvents ? "Event topics or keywords to log. Empty means motion." : "Event topics or keywords that start recording. Empty means motion."} />
                 </>}
                 {recordMode === "TAG" && (
                     <FormControlInput input={<MultiValueTable columnDef={TRIGGER_COLUMNS} buttonText="Add Trigger" emptyText="No triggers" />}
@@ -238,7 +247,7 @@ async function probeFromForm(probe: (args: ProbeArgs) => Promise<ProbeResult>, g
     let url: string = getValues(f("onvifUrl")) ?? "";
     if (!url && mainUrl) {
         try {
-            url = `http://${new URL(mainUrl.replace(/^rtsps?:/i, "http:")).hostname}/onvif/device_service`;
+            url = `http://${new URL(mainUrl.replace(/^(rtsps?|rtmps?):/i, "http:")).hostname}/onvif/device_service`;
         } catch {
             url = "";
         }
