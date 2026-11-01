@@ -113,6 +113,10 @@ public final class ProxyRoutes {
                         res.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
                         return null;
                     }
+                    if (endpoint.equals("list") && !boundedList(req.getParameter("start"), req.getParameter("end"))) {
+                        res.setStatus(HttpServletResponse.SC_BAD_REQUEST);
+                        return null;
+                    }
                     String query = req.getRequest().getQueryString();
                     HttpRequest r = HttpRequest.newBuilder(URI.create(server.get().playbackUrl() + "/" + endpoint + "?" + query))
                         .timeout(Duration.ofMinutes(10)).GET().build();
@@ -136,6 +140,16 @@ public final class ProxyRoutes {
                     }
                     return null;
                 }).mount();
+        }
+    }
+
+    /** See {@link RecordingLister}: an unbounded /list can kill MediaMTX, so it is never passed on. */
+    static boolean boundedList(String start, String end) {
+        try {
+            Duration d = Duration.between(java.time.OffsetDateTime.parse(start), java.time.OffsetDateTime.parse(end));
+            return d.compareTo(RecordingLister.WINDOW) <= 0;
+        } catch (RuntimeException e) {
+            return false;
         }
     }
 

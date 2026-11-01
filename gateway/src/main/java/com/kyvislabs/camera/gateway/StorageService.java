@@ -34,6 +34,7 @@ import com.kyvislabs.camera.gateway.transcode.TranscodeService;
 public class StorageService {
     private static final LoggerEx log = LoggerEx.newBuilder().build("camera.Storage");
     private static final long CACHE_MS = 30_000;
+    private static final int SEGMENT_WARNING = 5000;
 
     public record Day(LocalDate day, Long bytes, int segments, double durationSec, long fromMs, long toMs) {
     }
@@ -107,28 +108,30 @@ public class StorageService {
         if (store.isPresent()) {
             usage = store.get().usage(camera, dayZone);
         }
-        // Recorded duration per day comes from MediaMTX, which knows each segment's length. With
-        // an external MediaMTX this is also the only source of the day rows themselves.
-        TreeMap<LocalDate, double[]> durations = new TreeMap<>(); // sec, from, to
-        try {
-            Instant from = usage.oldestMs() != null ? Instant.ofEpochMilli(usage.oldestMs()) : Instant.ofEpochMilli(0);
-            for (MediaMtxClient.Span span : manager.client().listRecordings(PathConfigs.mainPath(camera), from, clock.instant())) {
-                LocalDate day = span.start().atZone(dayZone).toLocalDate();
-                double[] d = durations.computeIfAbsent(day, k -> new double[] {0, Double.MAX_VALUE, -Double.MAX_VALUE});
-                d[0] += span.durationSec();
-                d[1] = Math.min(d[1], span.start().toEpochMilli());
-                d[2] = Math.max(d[2], span.start().toEpochMilli());
-            }
-        } catch (Exception e) {
-            warnings.add("recorded durations unavailable: " + e.getMessage());
-        }
         List<Day> days = new ArrayList<>();
         if (store.isPresent()) {
+            Map<LocalDate, Double> durations = store.get().durations(camera, dayZone, segmentMs());
             for (RecordingStore.DayUsage d : usage.days()) {
-                double[] dur = durations.get(d.day());
-                days.add(new Day(d.day(), d.bytes(), d.segments(), dur == null ? 0 : dur[0], d.fromMs(), d.toMs()));
+                days.add(new Day(d.day(), d.bytes(), d.segments(), durations.getOrDefault(d.day(), 0.0), d.fromMs(), d.toMs()));
+            }
+            if (usage.segments() > SEGMENT_WARNING) {
+                warnings.add(usage.segments() + " recording segments: an unstable stream starts a new one each time it drops,"
+                    + " and very many slow recording lookups. Check the camera's connection or shorten its retention.");
             }
         } else {
+            // With an external MediaMTX this is the only source of the day rows
+            TreeMap<LocalDate, double[]> durations = new TreeMap<>(); // sec, from, to
+            try {
+                for (MediaMtxClient.Span span : manager.client().listRecordings(PathConfigs.mainPath(camera), null, clock.instant())) {
+                    LocalDate day = span.start().atZone(dayZone).toLocalDate();
+                    double[] d = durations.computeIfAbsent(day, k -> new double[] {0, Double.MAX_VALUE, -Double.MAX_VALUE});
+                    d[0] += span.durationSec();
+                    d[1] = Math.min(d[1], span.start().toEpochMilli());
+                    d[2] = Math.max(d[2], span.start().toEpochMilli());
+                }
+            } catch (Exception e) {
+                warnings.add("recorded durations unavailable: " + e.getMessage());
+            }
             durations.forEach((day, d) -> days.add(new Day(day, null, 0, d[0], (long) d[1], (long) d[2])));
         }
 
@@ -174,6 +177,7 @@ public class StorageService {
             }
         }
         RecordingStore.Deleted d = store.delete(camera, startMs, endMs, segmentMs());
+        manager.client().recordingsDeleted(PathConfigs.mainPath(camera));
         invalidate(camera);
         log.infof("Camera '%s': deleted %d segments (%d bytes), %d skipped", camera, d.files(), d.bytes(), d.skipped());
         return d;
@@ -183,6 +187,7 @@ public class StorageService {
     public RecordingStore.Deleted deleteAll(String camera) throws IOException {
         RecordingStore store = requireStore();
         RecordingStore.Deleted d = store.deleteAll(camera, segmentMs());
+        manager.client().recordingsDeleted(PathConfigs.mainPath(camera));
         int n = events.deleteAll(camera);
         transcoder.clearCache();
         invalidate(camera);

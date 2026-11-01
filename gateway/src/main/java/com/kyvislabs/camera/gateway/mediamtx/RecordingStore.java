@@ -141,6 +141,23 @@ public final class RecordingStore {
     }
 
     /**
+     * Seconds recorded per day in {@code dayZone}, from the file names alone: each segment runs
+     * until the next starts, up to the segment length. Opening the files is what MediaMTX's
+     * {@code /list} does, which a long history cannot afford.
+     */
+    public java.util.Map<LocalDate, Double> durations(String camera, ZoneId dayZone, long segmentMs) throws IOException {
+        List<Segment> segs = segments(camera);
+        java.util.Map<LocalDate, Double> out = new TreeMap<>();
+        for (int i = 0; i < segs.size(); i++) {
+            long start = segs.get(i).startMs();
+            long next = i + 1 < segs.size() ? segs.get(i + 1).startMs() : clock.millis();
+            long ms = Math.max(0, Math.min(next - start, segmentMs));
+            out.merge(Instant.ofEpochMilli(start).atZone(dayZone).toLocalDate(), ms / 1000.0, Double::sum);
+        }
+        return out;
+    }
+
+    /**
      * Deletes the segments starting in {@code [startMs, endMs)}, except any still being written.
      *
      * @param segmentMs the configured segment length: a segment that started less than this

@@ -107,4 +107,13 @@ class RecordingStoreTest {
         assertFalse(Files.exists(a));
         assertTrue(Files.exists(open));
     }
+
+    @Test
+    void durationsComeFromFileNames() throws Exception {
+        segment("a", NOW.minusSeconds(7200), 1);
+        segment("a", NOW.minusSeconds(7200 - 60), 1);
+        segment("a", NOW.minusSeconds(120), 1);
+        // 60 s until the next segment, then one full segment across a gap, then 120 s to now
+        assertEquals(60.0 + 600 + 120, store().durations("a", UTC, SEGMENT_MS).values().iterator().next());
+    }
 }

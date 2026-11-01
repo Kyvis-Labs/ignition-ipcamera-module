@@ -29,12 +29,15 @@ import com.inductiveautomation.ignition.common.gson.JsonParser;
  */
 public class MediaMtxClient {
     private static final Duration TIMEOUT = Duration.ofSeconds(5);
+    /** MediaMTX does not stop on a dropped request, so giving up early only piles more work on it. */
+    private static final Duration LIST_TIMEOUT = Duration.ofMinutes(2);
 
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(TIMEOUT).build();
     private final String apiUrl;
     private final String playbackUrl;
     private final String authHeader;
     private final Supplier<String> playbackToken;
+    private final RecordingLister lister = new RecordingLister(this::fetchRecordings, java.time.Clock.systemUTC());
 
     /**
      * @param playbackToken token appended to playback-server requests, which go through the
@@ -78,6 +81,15 @@ public class MediaMtxClient {
 
     /** Recorded spans of a path from the playback server. Empty when nothing is recorded. */
     public List<Span> listRecordings(String path, Instant start, Instant end) throws IOException {
+        return lister.list(path, start, end);
+    }
+
+    /** Drops cached spans of a path whose recordings were just deleted. */
+    public void recordingsDeleted(String path) {
+        lister.invalidate(path);
+    }
+
+    private List<Span> fetchRecordings(String path, Instant start, Instant end) throws IOException {
         StringBuilder q = new StringBuilder("/list?path=").append(enc(path));
         if (start != null) {
             q.append("&start=").append(enc(start.toString()));
@@ -86,7 +98,7 @@ public class MediaMtxClient {
             q.append("&end=").append(enc(end.toString()));
         }
         q.append("&token=").append(enc(playbackToken.get()));
-        HttpResponse<String> r = request("GET", playbackUrl + q, null);
+        HttpResponse<String> r = request("GET", playbackUrl + q, null, LIST_TIMEOUT);
         if (r.statusCode() == 404) {
             return List.of();
         }
@@ -173,7 +185,11 @@ public class MediaMtxClient {
     }
 
     private HttpResponse<String> request(String method, String url, JsonObject body) throws IOException {
-        HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(url)).timeout(TIMEOUT);
+        return request(method, url, body, TIMEOUT);
+    }
+
+    private HttpResponse<String> request(String method, String url, JsonObject body, Duration timeout) throws IOException {
+        HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(url)).timeout(timeout);
         if (authHeader != null && url.startsWith(apiUrl)) {
             b.header("Authorization", authHeader);
         }
